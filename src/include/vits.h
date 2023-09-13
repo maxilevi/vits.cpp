@@ -7,21 +7,18 @@
 #include <string>
 #include <stdint.h>
 #include <vector>
+#include "vits_model_data.h"
 
 typedef struct ggml_tensor * tensor_t;
-
-struct vits_model_weights {
-    struct ggml_tensor* encoder_embeddings;
-    struct ggml_tensor* encoder_embeddings;
-};
 
 class vits_model {
 private:
     int speaking_rate;
-    vits_model_weights * model;
+    std::unique_ptr<vits_model_data> model;
+    struct ggml_context * ctx;
 
 public:
-
+    vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model, int speaking_rate);
     std::vector<uint8_t> process(std::string phonemes);
 };
 
