@@ -3,7 +3,7 @@
 #include <assert.h>
 
 int main(int argc, char ** argv) {
-    vits_model * model = vits_model_load_from_file("../../scripts/vits-facebook-mms-tts-spa.ggml");
+    vits_model * model = vits_model_load_from_file("./scripts/vits-spanish.ggml");
     assert(model != nullptr);
 
     auto result = vits_model_process(model, "phonemes");

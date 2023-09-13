@@ -8,6 +8,11 @@ vits_model::vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data
     this->speaking_rate = speaking_rate;
 }
 
+vits_model::~vits_model() {
+    printf("Free'ing vits model\n");
+    ggml_free(ctx);
+}
+
 //https://github.com/huggingface/transformers/blob/09b2de6eb74b1e5ff4f4c3d9839485f4165627c9/src/transformers/models/vits/modeling_vits.py#L1356
 /*tensor_t vits_duration_predictor::process(tensor_t inputs) {
 
@@ -110,11 +115,12 @@ std::vector<uint8_t> vits_model::process(std::string phonemes) {
 
 vits_model * vits_model_load_from_file(const char * path) {
     struct ggml_init_params params = {
-            .mem_size   = 16*1024*1024,
+            .mem_size   = 256*1024*1024,
             .mem_buffer = nullptr,
     };
 
     struct ggml_context * ctx = ggml_init(params);
+    printf("Initialized ggml context with %d mb\n", params.mem_size / 1024 / 1024);
     auto model_data = vits_model_data::from_file(path, ctx);
     return new vits_model(ctx, std::move(model_data), 1);
 }

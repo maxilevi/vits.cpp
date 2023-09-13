@@ -20,39 +20,37 @@ std::pair<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std:
 
     while (!file.eof()) {
         // Read tensor name
-        int32_t name_len;
-        file.read(reinterpret_cast<char*>(&name_len), sizeof(int32_t));
+        uint32_t name_len;
+        file.read(reinterpret_cast<char*>(&name_len), sizeof(uint32_t));
+
         std::vector<char> name_bytes(name_len);
         file.read(name_bytes.data(), name_len);
+        std::string tensor_name(name_bytes.begin(), name_bytes.end());
 
         // Read tensor type
-        uint8_t type_byte;
-        file.read(reinterpret_cast<char*>(&type_byte), sizeof(uint8_t));
+        uint32_t type_byte;
+        file.read(reinterpret_cast<char*>(&type_byte), sizeof(uint32_t));
 
         // Read tensor shape
-        int32_t shape_len;
-        file.read(reinterpret_cast<char*>(&shape_len), sizeof(int32_t));
+        uint32_t shape_len;
+        file.read(reinterpret_cast<char*>(&shape_len), sizeof(uint32_t));
         std::vector<int64_t> tensor_shape(shape_len);
         for(int i = 0; i < shape_len; ++i) {
-            int32_t dim;
-            file.read(reinterpret_cast<char *>(&dim), sizeof(int32_t));
+            uint32_t dim;
+            file.read(reinterpret_cast<char *>(&dim), sizeof(uint32_t));
             tensor_shape[i] = (int64_t) dim;
         }
 
         // Read tensor bytes and data
-        int32_t tensor_bytes_len;
-        file.read(reinterpret_cast<char*>(&tensor_bytes_len), sizeof(int32_t));
+        uint32_t tensor_bytes_len;
+        file.read(reinterpret_cast<char*>(&tensor_bytes_len), sizeof(uint32_t));
         std::vector<char> tensor_bytes(tensor_bytes_len);
         file.read(tensor_bytes.data(), tensor_bytes_len);
 
         // Create the ggml_tensor based on shape
-        ggml_tensor* tensor = tensor = ggml_new_tensor(ctx, (ggml_type)type_byte, shape_len, tensor_shape.data());
-        // tensor->fill_data(tensor_bytes.data());
-
-        std::string tensor_name(name_bytes.begin(), name_bytes.end());
-        tensors[tensor_name] = tensor;
+        tensors[tensor_name] = ggml_new_tensor(ctx, (ggml_type)type_byte, shape_len, tensor_shape.data());
     }
-
+    printf("Loaded %lu tensors\n", tensors.size());
     file.close();
     return std::make_pair(tensors, config);
 }
