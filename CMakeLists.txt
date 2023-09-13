@@ -12,11 +12,11 @@ endif()
 
 add_subdirectory(ggml)
 
-add_library(vits src/vits.cpp)
+add_library(vits src/vits.cpp src/vits_model_data.cpp)
 target_include_directories(vits PRIVATE ggml/include)
 
 target_link_libraries(vits PRIVATE ggml)
 
 add_executable(test test/main.cpp)
-target_include_directories(test PRIVATE src/include)
+target_include_directories(test PRIVATE src/include ggml/include)
 target_link_libraries(test PRIVATE vits)
