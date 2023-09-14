@@ -73,10 +73,24 @@ struct ggml_cgraph vits_model::build_graph() {
                 auto _ = model->use("layer_norm");
                 cur = linear_with_bias(ctx, cur, model->get("weight"), model->get("bias"));
             }
+
             //Feed forward
             {
-                if (config.hidden_act != "RELU") GGML_ASSERT("activation function not supported");
+                auto _ = model->use("feed_forward");
+                if (config["hidden_act"] != "RELU")
+                    throw std::runtime_error("activation function not supported");
+
+                cur = ggml_permute(ctx, hidden_states, 0, 2, 1, -1);
+
+                cur = conv1d_with_bias(ctx, cur,  model->get("conv_1.weight"), model->get("conv_1.bias"));
+                cur = ggml_relu(cur);
+
+                cur = conv1d_with_bias(ctx, cur,  model->get("conv_2.weight"), model->get("conv_2.bias"));
+                cur = ggml_relu(cur);
+
+                cur = ggml_permute(ctx, hidden_states, 0, 2, 1, -1);
             }
+
             // Final layer norm
             {
                 auto _ = model->use("final_layer_norm");
