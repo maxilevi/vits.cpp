@@ -2,6 +2,10 @@
 #include <memory>
 #include <stdlib.h>
 
+#define SHAPE(tensor) printf("Shape '%s': %d x %d x %d x %d\n", ##tensor, tensor->shape[0], tensor->shape[1], tensor->shape[2], tensor->shape[3]);
+
+#define SAVE_LAYER(tensor, name) todo
+
 vits_model::vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model, int speaking_rate) {
     this->ctx = ctx;
     this->model = std::move(model);
@@ -14,32 +18,80 @@ vits_model::~vits_model() {
 }
 
 //https://github.com/huggingface/transformers/blob/09b2de6eb74b1e5ff4f4c3d9839485f4165627c9/src/transformers/models/vits/modeling_vits.py#L1356
-/*tensor_t vits_duration_predictor::process(tensor_t inputs) {
 
-    ggml_conv_1d(ctx, );
-    inputs = self.conv_1(inputs * padding_mask)
-    inputs = torch.relu(inputs)
-    inputs = self.norm_1(inputs.transpose(1, -1)).transpose(1, -1)
-    inputs = self.dropout(inputs)
-
-    inputs = self.conv_2(inputs * padding_mask)
-    inputs = torch.relu(inputs)
-    inputs = self.norm_2(inputs.transpose(1, -1)).transpose(1, -1)
-    inputs = self.dropout(inputs)
-
-    inputs = self.proj(inputs * padding_mask)
-    return inputs * padding_mask
+struct ggml_tensor* linear_with_bias(struct ggml_context ctx, struct ggml_tensor* input, struct ggml_tensor* weight, struct ggml_tensor* bias) {
+    auto cur = ggml_mul_mat(ctx, input, weight);
+    cur = ggml_add(ctx, cur, bias);
+    return cur;
 }
 
-*/
-std::vector<uint8_t> vits_model::process(std::string phonemes) {
-/*
-    struct ggml_init_params params = {
-            .mem_size   = 16*1024*1024,
-            .mem_buffer = nullptr,
-    };
+struct ggml_tensor* conv1d_with_bias(struct ggml_context ctx, struct ggml_tensor* input, struct ggml_tensor* weight, struct ggml_tensor* bias) {
+    auto cur = ggml_conv_1d(ctx, cur, proj_weights, 1, 0, 1);
+    cur = ggml_add(ctx, cur, proj_bias);
+    return cur;
+}
 
-    struct ggml_context * ctx = ggml_init(params);
+struct ggml_cgraph vits_model::build_graph() {
+    struct ggml_cgraph gf = {};
+    struct ggml_tensor* cur = nullptr;
+
+    auto config = this->model->config;
+    auto hidden_size = std::stoi(config["hidden_size"]);
+    // Text encoder
+    {
+        auto _0 = model->use("text_encoder");
+
+        auto input_ids_in = this->graph_input_ids;
+        cur = ggml_get_rows(ctx, model->get("embed_tokens.weight"), input_ids_in);
+
+        for (int i = 0; i < model->config["num_hidden_layers"]; i++) {
+            std::string base_name = "encoder.layers." + std::to_string(i);
+            auto _1 = model->use("attention");
+            // Attention
+            {
+                auto _ = model->use("attention");
+
+                auto k = model->get("emb_rel_k");
+                auto v = model->get("emb_rel_v");
+                auto k_proj_w = model->get("k_proj.weight");
+                auto k_proj_b = model->get("k_proj.bias");
+                auto v_proj_w = model->get("v_proj.weight");
+                auto v_proj_b = model->get("v_proj.bias");
+                auto q_proj_w = model->get("q_proj.weight");
+                auto q_proj_b = model->get("q_proj.bias");
+                auto out_proj_w = model->get("out_proj.weight");
+                auto out_proj_b = model->get("out_proj.bias");
+
+                auto query = linear_with_bias(ctx, cur, q_proj_w, q_proj_b); // add scaling?
+                auto key = linear_with_bias(ctx, cur, k_proj_w, k_proj_b);
+                auto value = linear_with_bias(ctx, cur, v_proj_w, v_proj_b);
+
+                cur = linear_with_bias(cur, out_proj_w, out_proj_b);
+            }
+            // Layer norm
+            {
+                auto _ = model->use("layer_norm");
+                cur = linear_with_bias(ctx, cur, model->get("weight"), model->get("bias"));
+            }
+            //Feed forward
+            {
+                if (config.hidden_act != "RELU") GGML_ASSERT("activation function not supported");
+            }
+            // Final layer norm
+            {
+                auto _ = model->use("final_layer_norm");
+                cur = linear_with_bias(ctx, cur, model->get("weight"), model->get("bias"));
+            }
+        }
+        auto _ = model->use("project");
+        cur = conv1d_with_bias(ctx, cur, model->get("weight"), model->get("bias"));
+    }
+    SAVE_LAYER(cur, "text_encoder");
+
+    ggml_build_forward_expand(&gf, cur);
+
+    return gf;
+/*
 
     struct ggml_tensor* cur = nullptr;
     struct ggml_tensor* input_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
@@ -110,6 +162,9 @@ std::vector<uint8_t> vits_model::process(std::string phonemes) {
     //struct ggml_tensor* latents = this->flow->process(hidden_states);
     //struct ggml_tensor* waveform = this->decoder->process(latents);
 */
+}
+
+std::vector<uint8_t> vits_model::process(std::string phonemes) {
     return std::vector<uint8_t>();
 }
 

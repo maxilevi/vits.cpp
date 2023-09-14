@@ -20,6 +20,8 @@ private:
 public:
     vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model, int speaking_rate);
     ~vits_model();
+    struct ggml_cgraph build_graph();
+    struct ggml_tensor* graph_input_ids;
     std::vector<uint8_t> process(std::string phonemes);
 };
 
