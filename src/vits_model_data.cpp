@@ -34,7 +34,7 @@ std::pair<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std:
         // Read tensor shape
         uint32_t shape_len;
         file.read(reinterpret_cast<char*>(&shape_len), sizeof(uint32_t));
-        std::vector<int64_t> tensor_shape(shape_len);
+        std::vector<int64_t> tensor_shape(GGML_MAX_DIMS, 1);
         for(int i = 0; i < shape_len; ++i) {
             uint32_t dim;
             file.read(reinterpret_cast<char *>(&dim), sizeof(uint32_t));
@@ -49,6 +49,7 @@ std::pair<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std:
 
         // Create the ggml_tensor based on shape
         tensors[tensor_name] = ggml_new_tensor(ctx, (ggml_type)type_byte, shape_len, tensor_shape.data());
+        printf("Loaded tensor %s (%lu x %lu x %lu x %lu)\n", tensor_name.c_str(), tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]);
     }
     printf("Loaded %lu tensors\n", tensors.size());
     file.close();
@@ -61,4 +62,34 @@ std::unique_ptr<vits_model_data> vits_model_data::from_file(const char* filename
     auto tensor_map = tensors_and_config.first;
     auto config = tensors_and_config.second;
     return std::make_unique<vits_model_data>(tensor_map, config);
+}
+
+std::string join(const std::vector<std::string>& vec, const std::string& delimiter) {
+    std::string result;
+    if (!vec.empty()) {
+        result += vec[0];
+        for (size_t i = 1; i < vec.size(); ++i) {
+            result += delimiter + vec[i];
+        }
+    }
+    return result;
+}
+
+vits_model_data::vits_model_data(std::unordered_map<std::string, ggml_tensor*> tensor_map, std::unordered_map<std::string, std::string> config) {
+    this->tensor_map = std::move(tensor_map);
+    this->config = std::move(config);
+}
+
+std::unique_ptr<prefix_guard> vits_model_data::use(std::string name) {
+    prefixes.push_back(name);
+    return std::make_unique<prefix_guard>(&prefixes);
+}
+
+struct ggml_tensor* vits_model_data::get(std::string name) const {
+    auto full_prefix = join(this->prefixes, '.');
+    auto name = full_prefix + "." + name;
+    if (tensor_map.find(name) == tensor_map.end()) {
+        throw std::runtime_error("[ERROR] tensor not found: " + name);
+    }
+    return tensor_map[name];
 }

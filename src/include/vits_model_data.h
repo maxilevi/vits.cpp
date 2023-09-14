@@ -11,15 +11,28 @@
 #include <vector>
 #include <memory>
 
+struct prefix_guard {
+    std::vector<std::string>& prefixes;
+    prefix_guard(std::vector<std::string>& prefixes) {
+        this->prefixes = prefixes;
+    }
+    ~prefix_guard() {
+        prefixes.pop_back();
+    }
+};
+
 struct vits_model_data {
     std::unordered_map<std::string, ggml_tensor*> tensor_map;
     std::unordered_map<std::string, std::string> config;
+    std::vector<std::string> prefixes;
 
     static std::unique_ptr<vits_model_data> from_file(const char* filename, ggml_context* ctx);
-    vits_model_data(std::unordered_map<std::string, ggml_tensor*> tensor_map, std::unordered_map<std::string, std::string> config) {
-        this->tensor_map = std::move(tensor_map);
-        this->config = std::move(config);
-    }
+
+    vits_model_data(std::unordered_map<std::string, ggml_tensor*> tensor_map, std::unordered_map<std::string, std::string> config);
+
+    std::unique_ptr<prefix_guard> use(std::string name);
+
+    struct ggml_tensor* get(std::string name) const;
 };
 
 
