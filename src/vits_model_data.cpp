@@ -8,6 +8,12 @@
 #include <stdint.h>
 #include <utility>
 
+static uint32_t read_number(std::ifstream& file) {
+    uint32_t number;
+    file.read(reinterpret_cast<char*>(&number), sizeof(uint32_t));
+    return number;
+}
+
 std::pair<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std::string, std::string>> load_model_from_bytes(const char* filename, ggml_context* ctx) {
     std::unordered_map<std::string, ggml_tensor*> tensors;
     std::ifstream file(filename, std::ios::binary);
@@ -17,39 +23,54 @@ std::pair<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std:
 
     // Read config
     std::unordered_map<std::string, std::string> config;
+    uint32_t config_count = read_number(file);
+    for(int i = 0; i < config_count; ++i) {
+        // Read config key
+        uint32_t key_len = read_number(file);
 
-    while (!file.eof()) {
+        std::vector<char> key_bytes(key_len);
+        file.read(key_bytes.data(), key_len);
+        std::string key(key_bytes.begin(), key_bytes.end());
+
+        // Read config value
+        uint32_t value_len = read_number(file);
+
+        std::vector<char> value_bytes(value_len);
+        file.read(value_bytes.data(), value_len);
+        std::string value(value_bytes.begin(), value_bytes.end());
+
+        config[key] = value;
+    }
+
+
+    uint32_t tensor_count = read_number(file);
+    for(int i = 0; i < tensor_count; ++i) {
         // Read tensor name
-        uint32_t name_len;
-        file.read(reinterpret_cast<char*>(&name_len), sizeof(uint32_t));
+        uint32_t name_len = read_number();
 
         std::vector<char> name_bytes(name_len);
         file.read(name_bytes.data(), name_len);
         std::string tensor_name(name_bytes.begin(), name_bytes.end());
 
         // Read tensor type
-        uint32_t type_byte;
-        file.read(reinterpret_cast<char*>(&type_byte), sizeof(uint32_t));
+        uint32_t type_byte = read_number(file);
 
         // Read tensor shape
-        uint32_t shape_len;
-        file.read(reinterpret_cast<char*>(&shape_len), sizeof(uint32_t));
+        uint32_t shape_len = read_number(file);
         std::vector<int64_t> tensor_shape(GGML_MAX_DIMS, 1);
         for(int i = 0; i < shape_len; ++i) {
-            uint32_t dim;
-            file.read(reinterpret_cast<char *>(&dim), sizeof(uint32_t));
+            uint32_t dim = read_number(file);
             tensor_shape[i] = (int64_t) dim;
         }
 
         // Read tensor bytes and data
-        uint32_t tensor_bytes_len;
-        file.read(reinterpret_cast<char*>(&tensor_bytes_len), sizeof(uint32_t));
+        uint32_t tensor_bytes_len = read_number(file);
         std::vector<char> tensor_bytes(tensor_bytes_len);
         file.read(tensor_bytes.data(), tensor_bytes_len);
 
         // Create the ggml_tensor based on shape
         tensors[tensor_name] = ggml_new_tensor(ctx, (ggml_type)type_byte, shape_len, tensor_shape.data());
-        printf("Loaded tensor %s (%lu x %lu x %lu x %lu)\n", tensor_name.c_str(), tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]);
+        printf("[%d/%d] Loaded tensor %s (%lu x %lu x %lu x %lu)\n", i, tensor_count, tensor_name.c_str(), tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]);
     }
     printf("Loaded %lu tensors\n", tensors.size());
     file.close();

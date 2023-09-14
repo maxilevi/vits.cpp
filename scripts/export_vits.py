@@ -2,9 +2,23 @@ import torch
 import struct
 from transformers import VitsModel
 
-def serialize_state_dict_to_binary(state_dict, file_name):
+def serialize_model_to_binary(config, state_dict, file_name):
     with open(file_name, 'wb') as f:
-        for key, tensor in state_dict.items():
+        # Write config
+        items = config.to_diff_dict().items()
+        f.write(struct.pack('<I', len(items)))
+        for key, value in items:
+            key_bytes = key.encode('utf-8')
+            value_bytes = str(value).encode('utf-8')
+            f.write(struct.pack('<I', len(key_bytes)))
+            f.write(key_bytes)
+            f.write(struct.pack('<I', len(value_bytes)))
+            f.write(value_bytes)
+
+        # Write state dict
+        tensors = state_dict.items()
+        f.write(struct.pack('<I', len(tensors)))
+        for key, tensor in tensors:
             # Write tensor name length and bytes
             tensor_name_bytes = key.encode('utf-8')
             f.write(struct.pack('<I', len(tensor_name_bytes)))
@@ -38,5 +52,6 @@ def serialize_state_dict_to_binary(state_dict, file_name):
 if __name__ == '__main__':
     model_name = "facebook/mms-tts-spa"
     model = VitsModel.from_pretrained(model_name)
-    serialize_state_dict_to_binary(model.state_dict(), f'./scripts/vits-spanish.ggml')
+    print(model.config)
+    serialize_model_to_binary(model.config, model.state_dict(), f'./scripts/vits-spanish.ggml')
     print("Done!")
