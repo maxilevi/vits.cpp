@@ -14,7 +14,7 @@ with torch.no_grad():
 print(output.shape, output.dtype)
 print(output[0])
 
-scipy.io.wavfile.write("techno.wav", rate=model.config.sampling_rate, data=output[0].detach().numpy())
+scipy.io.wavfile.write("test.wav", rate=model.config.sampling_rate, data=output[0].detach().numpy())
 
 for layer in model.state_dict().keys():
     print(layer)
