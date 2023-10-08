@@ -7,7 +7,7 @@
 
 
 struct ggml_tensor* pad_3d(struct ggml_context* ctx, struct ggml_tensor* tensor, std::vector<int> pads) {
-    //ASSERT(tensor->n_dims == 3, "Input tensor should be 3D");
+    ASSERT(tensor->n_dims == 3, "Input tensor should be 3D");
     ASSERT(pads.size() == 6, "Invalid pad count");
 
     // Compute the new shape
