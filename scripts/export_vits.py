@@ -41,7 +41,7 @@ def serialize_model_to_binary(config, state_dict, file_name):
             # Write tensor shape length (number of dimensions) and shape values
             tensor_rank = len(tensor.shape)
             f.write(struct.pack('<I', tensor_rank))
-            for dim in tensor.shape:
+            for dim in tensor.shape[::-1]:
                 f.write(struct.pack('<I', dim))
 
             # Write tensor data bytes length and bytes
