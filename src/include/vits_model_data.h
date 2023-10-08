@@ -13,9 +13,7 @@
 
 struct prefix_guard {
     std::vector<std::string>& prefixes;
-    prefix_guard(std::vector<std::string>& prefixes) {
-        this->prefixes = prefixes;
-    }
+    prefix_guard(std::vector<std::string>& prefixes) : prefixes(prefixes) {}
     ~prefix_guard() {
         prefixes.pop_back();
     }
