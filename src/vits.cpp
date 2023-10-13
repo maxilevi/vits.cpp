@@ -289,6 +289,7 @@ struct ggml_cgraph vits_model::build_graph(struct ggml_tensor * input_ids) {
         cur = conv1d_with_bias(ctx, cur, model->get("weight"), model->get("bias"));
         cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
         //priors and such for flow
+        // prior_means, prior_log_variances = torch.split(stats, self.config.flow_size, dim=2)
     }
     printf("Finished text encoder\n");
     SAVE_LAYER(last_hidden_state, "text_encoder");
