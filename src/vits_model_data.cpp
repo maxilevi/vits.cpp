@@ -3,15 +3,54 @@
 //
 
 #include "include/vits_model_data.h"
+#include "include/debug.h"
 #include <fstream>
 #include <stdio.h>
 #include <stdint.h>
 #include <utility>
+#include <unordered_set>
 
 static uint32_t read_number(std::ifstream& file) {
     uint32_t number;
     file.read(reinterpret_cast<char*>(&number), sizeof(uint32_t));
     return number;
+}
+
+bool should_convert_to_fp16(const std::string& tensor_name) {
+    /*
+    std::unordered_set<std::string> names;
+    int max_layers = 12;
+    for (int i = 0; i < max_layers; ++i) {
+        names.insert("text_encoder.encoder.layers." + std::to_string(i) + ".feed_forward.conv_1.bias");
+        names.insert("text_encoder.encoder.layers." + std::to_string(i) + ".feed_forward.conv_1.weight");
+    }
+
+    return names.find(tensor_name) != names.end();
+     */
+    return false;
+}
+
+struct ggml_tensor* load_tensor(struct ggml_context* ctx, std::ifstream& file, const std::string& tensor_name, int shape_len, const std::vector<int64_t>& tensor_shape, uint32_t tensor_bytes_len) {
+    int nelements = tensor_bytes_len / sizeof(float);
+
+    std::vector<float> fp32_data(nelements);
+    file.read(reinterpret_cast<char*>(fp32_data.data()), tensor_bytes_len);
+
+    bool convert_to_fp16 = should_convert_to_fp16(tensor_name);  // Implement this function based on your needs
+
+    ggml_type target_type = convert_to_fp16 ? GGML_TYPE_F16 : GGML_TYPE_F32;
+    auto tensor = ggml_new_tensor(ctx, target_type, shape_len, tensor_shape.data());
+
+    if (convert_to_fp16) {
+        std::vector<ggml_fp16_t> fp16_data(nelements);
+        ggml_fp32_to_fp16_row(fp32_data.data(), fp16_data.data(), nelements);
+        memcpy(tensor->data, fp16_data.data(), nelements * sizeof(ggml_fp16_t));
+    } else {
+        memcpy(tensor->data, fp32_data.data(), nelements * sizeof(float));
+    }
+    ggml_set_name(tensor, tensor_name.c_str());
+
+    return tensor;
 }
 
 std::pair<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std::string, std::string>> load_model_from_bytes(const char* filename, ggml_context* ctx) {
@@ -66,9 +105,7 @@ std::pair<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std:
         // Read tensor byte length and load directly from file to tensor
         uint32_t tensor_bytes_len = read_number(file);
 
-        // Create the ggml_tensor based on shape
-        auto tensor = ggml_new_tensor(ctx, (ggml_type)type_byte, shape_len, tensor_shape.data());
-        file.read((char*) tensor->data, tensor_bytes_len);
+        auto tensor = load_tensor(ctx, file, tensor_name, shape_len, tensor_shape, tensor_bytes_len);
 
         printf("[%d/%d] Loaded tensor %s (%lu x %lu x %lu x %lu)\n", i, tensor_count, tensor_name.c_str(), tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]);
         tensors[tensor_name] = tensor;

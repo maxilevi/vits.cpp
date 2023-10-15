@@ -1,6 +1,6 @@
 #include "include/vits.h"
-#include "debug.h"
-#include "ggml-util.h"
+#include "include/debug.h"
+#include "include/ggml-util.h"
 #include <memory>
 #include <thread>
 #include <algorithm>
@@ -40,23 +40,27 @@ struct ggml_tensor* linear_with_bias(struct ggml_context* ctx, struct ggml_tenso
 }
 
 struct ggml_tensor* conv1d_with_bias(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, struct ggml_tensor* proj_bias) {
-    auto cur = ggml_conv_1d(ctx, proj_weights, input, 1, 0, 1);
+    auto proj_weights_fp16 = cast_tensor_fp32_to_fp16(ctx, proj_weights);
+    auto cur = ggml_conv_1d(ctx, proj_weights_fp16, input, 1, 0, 1);
     cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
+    cur = ggml_cont(ctx, cur);
     cur = ggml_add(ctx, cur, proj_bias);
     cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
+    cur = ggml_cont(ctx, cur);
     return cur;
 }
 
 struct ggml_tensor * get_relative_embeddings(struct ggml_context* ctx, struct ggml_tensor * relative_embeddings, int length, int window_size) {
     int pad_length = std::max(length - (window_size + 1), 0);
+    struct ggml_tensor* padded_embeddings = relative_embeddings;
     if (pad_length > 0) {
-        relative_embeddings = pad_3d(ctx, relative_embeddings, {0, 0, pad_length, pad_length, 0, 0});
+        padded_embeddings = pad_3d(ctx, relative_embeddings, {0, 0, pad_length, pad_length, 0, 0});
     }
 
     int slice_start_position = std::max((window_size + 1) - length, 0);
     int slice_end_position = slice_start_position + 2 * length - 1;
     printf("slice_start_position = %d, slice_end_position = %d\n", slice_start_position, slice_end_position);
-    return slice_3d(ctx, relative_embeddings, 0, -1, slice_start_position, slice_end_position, 0, -1);
+    return slice_3d(ctx, padded_embeddings, 0, -1, slice_start_position, slice_end_position, 0, -1);
 }
 
 struct ggml_tensor * relative_position_to_absolute_position(struct ggml_context* ctx, struct ggml_tensor * x) {
@@ -66,6 +70,7 @@ struct ggml_tensor * relative_position_to_absolute_position(struct ggml_context*
 
     x = pad_3d(ctx, x, {0, 0, 0, 0, 0, 1});
     printf("length = %d, batch_heads = %d\n", length, batch_heads);
+
     auto x_flat = ggml_reshape_2d(ctx, x, length * 2 * length, batch_heads);
     x_flat = pad_2d(ctx, x_flat, {0, 0, 0, (int)length - 1});
 
@@ -115,10 +120,8 @@ ggml_tensor* shape_attn(struct ggml_context* ctx, struct ggml_tensor* tensor, in
     return ggml_cont(ctx, cur);
 }
 
-struct ggml_cgraph vits_model::build_graph(struct ggml_tensor * input_ids) {
-    struct ggml_cgraph gf = {};
+struct ggml_cgraph* vits_model::build_graph(struct ggml_tensor * input_ids) {
     struct ggml_tensor* cur = nullptr;
-    struct ggml_tensor* last_hidden_state = nullptr;
 
     auto config = this->model->config;
 
@@ -143,6 +146,7 @@ struct ggml_cgraph vits_model::build_graph(struct ggml_tensor * input_ids) {
         for (int i = 0; i < layer_count; i++) {
             std::string base_name = "encoder.layers." + std::to_string(i);
             auto _1 = model->use(base_name);
+            auto residual = cur;
             // Attention
             {
                 printf("Building '%d'\n", i);
@@ -192,7 +196,7 @@ struct ggml_cgraph vits_model::build_graph(struct ggml_tensor * input_ids) {
                 key_states = ggml_reshape_3d(ctx, key_states, target_shape[0], target_shape[1], target_shape[2]);
                 value_states = ggml_reshape_3d(ctx, value_states, target_shape[0], target_shape[1], target_shape[2]);
 
-                auto attn_weights = ggml_mul_mat(ctx, query_states, key_states);
+                auto attn_weights = ggml_mul_mat(ctx, key_states, query_states);
 
                 ASSERT(attn_weights->ne[2] == dim0 && attn_weights->ne[1] == src_len && attn_weights->ne[0] == src_len, "Shape is wrong");
 
@@ -200,6 +204,7 @@ struct ggml_cgraph vits_model::build_graph(struct ggml_tensor * input_ids) {
                     auto key_relative_embeddings = get_relative_embeddings(ctx, emb_rel_k, src_len, window_size);
                     auto relative_logits = ggml_mul_mat(ctx, key_relative_embeddings, query_states);
                     auto rel_pos_bias = relative_position_to_absolute_position(ctx, relative_logits);
+
                     attn_weights = ggml_add(ctx, attn_weights, rel_pos_bias);
                 }
 
@@ -210,10 +215,10 @@ struct ggml_cgraph vits_model::build_graph(struct ggml_tensor * input_ids) {
                     ASSERT(false, "Not implemented");
                 }
 
-                attn_weights = ggml_permute(ctx, attn_weights, 1, 0, 2, 3);
                 value_states = ggml_permute(ctx, value_states, 1, 0, 2, 3);
+                value_states = ggml_cont(ctx, value_states);
 
-                auto attn_output = batched_mul_mat(ctx, value_states, attn_weights);
+                auto attn_output = ggml_mul_mat(ctx, value_states, attn_weights);
 
                 ASSERT(attn_output->ne[0] == dim2 && attn_output->ne[1] == tgt_len && attn_output->ne[2] == dim0, "`attn_output` size mismatch");
 
@@ -221,6 +226,7 @@ struct ggml_cgraph vits_model::build_graph(struct ggml_tensor * input_ids) {
                     auto value_relative_embeddings = get_relative_embeddings(ctx, emb_rel_v, src_len, window_size);
                     auto relative_weights = absolute_position_to_relative_position(ctx, attn_weights);
                     value_relative_embeddings = ggml_permute(ctx, value_relative_embeddings, 1, 0, 2, 3);
+                    value_relative_embeddings = ggml_cont(ctx, value_relative_embeddings);
                     auto rel_pos_bias = ggml_mul_mat(ctx, value_relative_embeddings, relative_weights);
                     attn_output = ggml_add(ctx, attn_output, rel_pos_bias);
                 }
@@ -235,11 +241,16 @@ struct ggml_cgraph vits_model::build_graph(struct ggml_tensor * input_ids) {
             }
 
             printf("Layer norm for layer %d\n", i);
+
             // Layer norm
             {
                 auto _ = model->use("layer_norm");
+                cur = ggml_add(ctx, cur, residual);
                 cur = layer_norm(ctx, cur, model->get("weight"), model->get("bias"), layer_norm_eps);
+
             }
+
+            residual = cur;
             printf("FF for layer %d\n", i);
             //Feed forward
             {
@@ -258,6 +269,7 @@ struct ggml_cgraph vits_model::build_graph(struct ggml_tensor * input_ids) {
                 } else {
                     throw std::runtime_error("ffn_kernel_size == 1 not supported ");
                 }
+
                 cur = pad_3d(ctx, cur, {0, 0, 0, 0, pad_left, pad_right});
 
                 cur = conv1d_with_bias(ctx, cur,  model->get("conv_1.weight"), model->get("conv_1.bias"));
@@ -267,34 +279,40 @@ struct ggml_cgraph vits_model::build_graph(struct ggml_tensor * input_ids) {
                 cur = pad_3d(ctx, cur, {0, 0, 0, 0, pad_left, pad_right});
 
                 cur = conv1d_with_bias(ctx, cur,  model->get("conv_2.weight"), model->get("conv_2.bias"));
-                cur = ggml_relu(ctx, cur);
                 cur = ggml_reshape_3d(ctx, cur, cur->ne[0], cur->ne[1], 1);
 
                 cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
             }
 
+
             printf("Final layer norm for layer %d\n", i);
             // Final layer norm
             {
                 auto _ = model->use("final_layer_norm");
+                cur = ggml_cont(ctx, cur);
+                cur = ggml_add(ctx, cur, residual);
                 cur = layer_norm(ctx, cur, model->get("weight"), model->get("bias"), layer_norm_eps);
             }
+
         }
-        last_hidden_state = cur;
+
         printf("Final proj for text encoder\n");
+        this->last_hidden_state = cur;
         auto _ = model->use("project");
-        SHAPE(model->get("weight"))
-        cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
-        SHAPE(cur)
-        cur = conv1d_with_bias(ctx, cur, model->get("weight"), model->get("bias"));
-        cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
+        //SHAPE(model->get("weight"))
+        //cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
+        //SHAPE(cur)
+        //cur = conv1d_with_bias(ctx, cur, model->get("weight"), model->get("bias"));
+        //cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
         //priors and such for flow
         // prior_means, prior_log_variances = torch.split(stats, self.config.flow_size, dim=2)
     }
-    printf("Finished text encoder\n");
-    SAVE_LAYER(last_hidden_state, "text_encoder");
 
-    ggml_build_forward_expand(&gf, cur);
+    printf("Finished text encoder\n");
+
+    auto gf = ggml_build_forward_ctx(ctx, this->last_hidden_state);
+
+    printf("Finished building graph\n");
 
     return gf;
 /*
@@ -378,9 +396,25 @@ std::vector<uint8_t> vits_model::process(std::string phonemes) {
 
     auto graph = this->build_graph(input_ids_tensor);
 
+    printf("Allocating memory for work computation...\n");
     int threads = std::min((int)std::thread::hardware_concurrency(), 2);
-    auto plan = ggml_graph_plan(&graph, threads);
-    ggml_graph_compute(&graph, &plan);
+    auto plan = ggml_graph_plan(graph, threads);
+    if (plan.work_size > 0) {
+        plan.work_data = (uint8_t*) malloc(plan.work_size);
+    }
+
+    printf("Computing...\n");
+    auto start = std::chrono::high_resolution_clock::now();
+    ggml_graph_compute(graph, &plan);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    free(plan.work_data);
+    printf("Computation took %lld milliseconds\n", delta);
+
+    //ASSERT(this->last_hidden_state->ne[2] == 1, "Batch size must be 1");
+    //ASSERT(this->last_hidden_state->type == GGML_TYPE_F32, "Type must be float32");
+
+    PRINT_TENSOR2(this->last_hidden_state);
 
     return std::vector<uint8_t>();
 }

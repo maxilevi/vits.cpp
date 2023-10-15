@@ -4,7 +4,7 @@ project(vits VERSION 0.1.0)
 set(CMAKE_C_STANDARD   20)
 set(CMAKE_CXX_STANDARD 20)
 
-if(CMAKE_BUILD_TYPE MATCHES Debug)
+if(CMAKE_BUILD_TYPE MATCHES scripts/debug)
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address")
     set(CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fsanitize=address")
@@ -17,6 +17,10 @@ target_include_directories(vits PRIVATE ggml/include)
 
 target_link_libraries(vits PRIVATE ggml)
 
-add_executable(test test/main.cpp)
-target_include_directories(test PRIVATE src/include ggml/include)
-target_link_libraries(test PRIVATE vits)
+add_executable(main test/main.cpp)
+target_include_directories(main PRIVATE src/include ggml/include)
+target_link_libraries(main PRIVATE vits)
+
+add_executable(tests test/test_ggml_utils.cpp)
+target_include_directories(tests PRIVATE src/include ggml/include)
+target_link_libraries(tests PRIVATE vits ggml)

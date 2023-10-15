@@ -1,5 +1,5 @@
-from transformers import VitsModel, AutoTokenizer
-import scipy
+from transformers import AutoTokenizer
+from vits import VitsModel
 import torch
 
 def load_tensor_from_file(filename):
@@ -20,7 +20,7 @@ def verify_text_encoder(model, input_ids):
         padding_mask=input_padding_mask,
     )
     print(text_encoder_output)
-    cpp_output = load_tensor_from_file('./debug/text_encoder_output.txt')
+    #cpp_output = load_tensor_from_file('./text_encoder_output.txt')
 
     assert torch.allclose(text_encoder_output, cpp_output, atol=1e-3)
 

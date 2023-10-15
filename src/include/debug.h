@@ -42,19 +42,43 @@
         } \
     } while(0)
 
+#define SHAPE(tensor) \
+do { \
+    printf("Shape '%s' (%d):", #tensor, tensor->type); \
+    for (int i = 0; i < tensor->n_dims; i++) { \
+        printf(" %lld", tensor->ne[i]); \
+        if(i < tensor->n_dims - 1) { \
+            printf(" x"); \
+        } \
+    } \
+    printf("\n"); \
+} while (0);
 
-void print_shape(const char* tensor_name, const struct ggml_tensor* tensor) {
-    printf("Shape '%s':", tensor_name);
-    for (int i = 0; i < tensor->n_dims; i++) {
-        printf(" %lld", tensor->ne[i]);
-        if(i < tensor->n_dims - 1) {
-            printf(" x");
-        }
-    }
-    printf("\n");
-}
-
-#define SHAPE(tensor) print_shape(#tensor, tensor);
+#define PRINT_TENSOR2(tensor)                                 \
+    do {                                                           \
+        printf("%s (%d, %d, %d, %d): [\n", #tensor, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);                             \
+        auto ne = tensor->ne;                                      \
+        auto nb0 = tensor->nb[0];                                  \
+        auto nb1 = tensor->nb[1];                                  \
+        auto nb2 = tensor->nb[2];                                  \
+        auto data = static_cast<float*>(tensor->data);        \
+        auto indent = "    ";\
+                                                                   \
+        for (int64_t i = 0; i < ne[2]; ++i) {                     \
+            std::cout << indent << "[\n";                   \
+            for (int64_t j = 0; j < ne[1]; ++j) {             \
+                std::cout << indent << indent << "["; \
+                for (int64_t k = 0; k < ne[0]; ++k) {              \
+                    size_t offset = (k * nb0 + j * nb1 + i * nb2)  \
+                                   / sizeof(float);                \
+                    std::cout << std::fixed << std::setprecision(4) << *(data + offset) << " ";                   \
+                }                                                  \
+                std::cout << "]\n";                                 \
+            }                                                 \
+            std::cout << indent << "]\n";  \
+        }                                                          \
+        printf("]\n");                                             \
+    } while (0);
 
 #define PRINT_TENSOR(tensor) \
     do { \
@@ -132,5 +156,26 @@ void print_shape(const char* tensor_name, const struct ggml_tensor* tensor) {
             exit(EXIT_FAILURE); \
         } \
     } while(0)
+
+#define MAX_PRINT_DIM 3
+
+#define PRINT_TENSOR_PREVIEW(tensor) do { \
+    ASSERT((tensor)->type == GGML_TYPE_F32, "Type must be float32"); \
+    float *output_data = (float*) ggml_get_data_f32((tensor)); \
+    int output_size = ggml_nelements((tensor)); \
+    printf("Tensor dimension: [%d, %d, %d]\n", (tensor)->ne[0], (tensor)->ne[1], (tensor)->ne[2]); \
+    printf("Data = [", output_size); \
+    int preview_size = (output_size > 12) ? 6 : output_size / 2; \
+    for (int i = 0; i < preview_size; ++i) { \
+        printf("%f, ", output_data[i]); \
+    } \
+    if (output_size > 12) { \
+        printf("..., "); \
+        for (int i = output_size - 6; i < output_size; ++i) { \
+            printf("%f, ", output_data[i]); \
+        } \
+    } \
+    printf("]\n"); \
+} while(0);
 
 #endif //VITS_CPP_DEBUG_H

@@ -16,6 +16,7 @@ private:
     int speaking_rate;
     std::unique_ptr<vits_model_data> model;
     struct ggml_context * ctx;
+    struct ggml_tensor * last_hidden_state;
     int load_number(std::string key);
     float load_float(std::string key);
     std::string load_param(std::string key);
@@ -23,7 +24,7 @@ private:
 public:
     vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model, int speaking_rate);
     ~vits_model();
-    struct ggml_cgraph build_graph(struct ggml_tensor * input_ids);
+    struct ggml_cgraph* build_graph(struct ggml_tensor * input_ids);
     std::vector<uint8_t> process(std::string phonemes);
 };
 
