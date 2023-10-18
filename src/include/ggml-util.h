@@ -8,7 +8,6 @@
 #include <ggml/ggml.h>
 #include "debug.h"
 
-
 struct ggml_tensor* pad_3d(struct ggml_context* ctx, struct ggml_tensor* tensor, std::vector<int> pads) {
     ASSERT(tensor->n_dims == 3, "Input tensor should be 3D");
     ASSERT(pads.size() == 6, "Invalid pad count");
@@ -102,46 +101,6 @@ struct ggml_tensor* slice_2d(struct ggml_context* ctx, struct ggml_tensor* tenso
     return slice_3d(ctx, tensor, start0, end0, start1, end1, 0, -1);
 }
 
-struct ggml_tensor* batched_mul_mat(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b) {
-    ASSERT(a->n_dims == 3 && b->n_dims == 3, "Both tensors must be 3D");
-    ASSERT(a->ne[2] == b->ne[2] || (a->ne[2] == 1 || b->ne[2] == 1), "The batch size (last dimension) should be the same for both tensors, or at least one should 1 for broadcasting");
-    printf("Started batched_mul_mat\n");
-    int64_t batch_size = std::max(a->ne[2], b->ne[2]);
-    struct ggml_tensor* result = nullptr;
-    bool needs_broadcast = a->ne[2] != b->ne[2];
-    bool broadcast_a = needs_broadcast && a->ne[2] == 1;
-    bool broadcast_b = needs_broadcast && b->ne[2] == 1;
-
-    for (int64_t i = 0; i < batch_size; ++i) {
-        // Creating a view for the i-th matrices from a and b
-        struct ggml_tensor* a_i = broadcast_a
-                ? ggml_view_2d(ctx, a, a->ne[0], a->ne[1], a->nb[1], 0)
-                : ggml_view_2d(ctx, a, a->ne[0], a->ne[1], a->ne[1] * ggml_element_size(a), i * a->ne[0] * a->ne[1] * ggml_element_size(a));
-        struct ggml_tensor* b_i = broadcast_b
-                ? ggml_view_tensor(ctx, b)
-                : ggml_view_2d(ctx, b, b->ne[0], b->ne[1], b->ne[1] * ggml_element_size(b), i * b->ne[0] * b->ne[1] * ggml_element_size(b));
-
-        // Multiplying the i-th matrices
-        SHAPE(a_i);
-        SHAPE(b_i);
-        struct ggml_tensor* r_i = ggml_mul_mat(ctx, a_i, b_i);
-        SHAPE(r_i);
-
-        // Concatenating result along the last dimension
-        if (result == nullptr) {
-            result = r_i;
-        } else {
-            SHAPE(result);
-            SHAPE(r_i);
-            struct ggml_tensor* new_result = ggml_concat(ctx, result, r_i);
-            result = new_result;
-        }
-    }
-    printf("Finished batched_mul_mat\n");
-    // Concat adds a fourth dimension, so we need to reshape to remove it
-    return ggml_reshape_3d(ctx, result, result->ne[0], result->ne[1], result->ne[2]);
-}
-
 struct ggml_tensor* cast_tensor_fp32_to_fp16(struct ggml_context* ctx, struct ggml_tensor* tensor) {
     ASSERT(tensor->type == GGML_TYPE_F32, "Input tensor needs to be fp32");
     struct ggml_tensor* target = ggml_new_tensor(ctx, GGML_TYPE_F16, tensor->n_dims, tensor->ne);
@@ -158,4 +117,31 @@ struct ggml_tensor* cast_tensor_fp16_to_fp32(struct ggml_context* ctx, struct gg
     return output;
 }
 
+
+std::pair<struct ggml_tensor*, struct ggml_tensor*> split_3d(struct ggml_context* ctx, struct ggml_tensor* tensor, int left, int right, int dim) {
+    ASSERT(tensor->n_dims == 3, "Input tensor should be 3D");
+    ASSERT(dim == 1, "Only split on second dimension is supported");
+    ASSERT(left + right == tensor->ne[dim], "Left and right should sum to the dimension size");
+
+    if (!ggml_is_contiguous(tensor))
+        tensor = ggml_cont(ctx, tensor);
+
+    auto left_tensor = slice_3d(ctx, tensor, 0, -1, 0, left, 0, -1);
+    auto right_tensor = slice_3d(ctx, tensor, 0, -1, left, -1, 0, -1);
+    return std::make_pair(left_tensor, right_tensor);
+}
+
+struct ggml_tensor* flip_3d(struct ggml_context* ctx, struct ggml_tensor* tensor, int along) {
+    ggml_map_custom1(ctx, tensor);
+
+    for (int64_t i = 0; i < src->ne[0]; ++i) {
+        void* src_ptr = (uint8_t*)src->data + i * src->nb[0];
+        void* dst_ptr = (uint8_t*)dst->data + (src->ne[0] - 1 - i) * src->nb[0];
+        memcpy(dst_ptr, src_ptr, src->nb[0]);
+    }
+}
+
+struct ggml_tensor* concat_3d(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b, int dim) {
+
+}
 #endif //VITS_CPP_GGML_UTIL_H
