@@ -8,40 +8,6 @@
 #include <iostream>
 #include <fstream>
 
-#define ASSERT_SHAPE(tensor, expected_shape) \
-    do { \
-        int expected_dims = sizeof(expected_shape) / sizeof(expected_shape[0]); \
-        int match = 1; \
-        if (tensor->n_dims != expected_dims) { \
-            match = 0; \
-        } else { \
-            for (int i = 0; i < expected_dims; i++) { \
-                if (tensor->ne[i] != expected_shape[i]) { \
-                    match = 0; \
-                    break; \
-                } \
-            } \
-        } \
-        if (!match) { \
-            fprintf(stderr, "Assertion failed for tensor '%s'. Expected shape: [", #tensor); \
-            for (int i = 0; i < expected_dims; i++) { \
-                fprintf(stderr, "%lld", expected_shape[i]); \
-                if (i < expected_dims - 1) { \
-                    fprintf(stderr, " x "); \
-                } \
-            } \
-            fprintf(stderr, "], but got: ["); \
-            for (int i = 0; i < tensor->n_dims; i++) { \
-                fprintf(stderr, "%lld", tensor->ne[i]); \
-                if (i < tensor->n_dims - 1) { \
-                    fprintf(stderr, " x "); \
-                } \
-            } \
-            fprintf(stderr, "]\n"); \
-            exit(EXIT_FAILURE); \
-        } \
-    } while(0)
-
 #define SHAPE(tensor) \
 do { \
     printf("Shape '%s' (%d):", #tensor, tensor->type); \
@@ -53,6 +19,43 @@ do { \
     } \
     printf("\n"); \
 } while (0);
+
+#define ASSERT(x, msg) \
+    do { \
+        if (!(x)) { \
+            fprintf(stderr, "Assertion failed: %s. Message: %s\n", #x, msg); \
+            exit(EXIT_FAILURE); \
+        } \
+    } while(0);
+
+
+#define ASSERT_SHAPE(tensor, dim0, dim1, dim2, dim3) \
+    do { \
+        std::vector<int64_t> expected_shape;         \
+        expected_shape.push_back(dim0);              \
+        expected_shape.push_back(dim1);              \
+        expected_shape.push_back(dim2);              \
+        expected_shape.push_back(dim3);              \
+        printf("Assert shape (");                    \
+        for (int i = 0; i < tensor->n_dims; ++i) { \
+            printf("%d", tensor->ne[i]); \
+            if (i != tensor->n_dims - 1) printf(", "); \
+        } \
+        printf(") == ("); \
+        for (int i = 0; i < tensor->n_dims; ++i) { \
+            printf("%lld", expected_shape[i]); \
+            if (i != tensor->n_dims - 1) printf(", "); \
+        } \
+        printf(")\n");                                   \
+        ASSERT(tensor->n_dims == expected_shape.size());                                                 \
+        for (int i = 0; i < tensor->n_dims; ++i) { \
+            if (tensor->ne[i] != expected_shape[i]) { \
+                printf("Shape should match\n"); /* or some kind of assertion failure mechanism */ \
+                break; \
+            } \
+        } \
+} while(0);
+
 
 #define PRINT_TENSOR2(tensor)                                 \
     do {                                                           \
@@ -147,15 +150,6 @@ do { \
         outfile.close(); \
     } while(0)
 
-
-
-#define ASSERT(x, msg) \
-    do { \
-        if (!(x)) { \
-            fprintf(stderr, "Assertion failed: %s. Message: %s\n", #x, msg); \
-            exit(EXIT_FAILURE); \
-        } \
-    } while(0)
 
 #define MAX_PRINT_DIM 3
 
