@@ -16,28 +16,13 @@ static uint32_t read_number(std::ifstream& file) {
     return number;
 }
 
-bool should_convert_to_fp16(const std::string& tensor_name) {
-    /*
-    std::unordered_set<std::string> names;
-    int max_layers = 12;
-    for (int i = 0; i < max_layers; ++i) {
-        names.insert("text_encoder.encoder.layers." + std::to_string(i) + ".feed_forward.conv_1.bias");
-        names.insert("text_encoder.encoder.layers." + std::to_string(i) + ".feed_forward.conv_1.weight");
-    }
-
-    return names.find(tensor_name) != names.end();
-     */
-    return false;
-}
-
 struct ggml_tensor* load_tensor(struct ggml_context* ctx, std::ifstream& file, const std::string& tensor_name, int shape_len, const std::vector<int64_t>& tensor_shape, uint32_t tensor_bytes_len) {
     int nelements = tensor_bytes_len / sizeof(float);
 
     std::vector<float> fp32_data(nelements);
     file.read(reinterpret_cast<char*>(fp32_data.data()), tensor_bytes_len);
 
-    bool convert_to_fp16 = should_convert_to_fp16(tensor_name);  // Implement this function based on your needs
-
+    bool convert_to_fp16 = false;
     ggml_type target_type = convert_to_fp16 ? GGML_TYPE_F16 : GGML_TYPE_F32;
     auto tensor = ggml_new_tensor(ctx, target_type, shape_len, tensor_shape.data());
 
