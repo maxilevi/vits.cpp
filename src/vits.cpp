@@ -179,6 +179,7 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
     auto act_func = this->load_param("hidden_act");
     auto hidden_size = this->load_number("hidden_size");
     auto window_size = this->load_number("window_size");
+    auto flow_size = this->load_number("flow_size");
     auto layer_head_mask = false;//config["layer_head_mask"];
     auto layer_count = this->load_number("num_hidden_layers");
     auto ffn_kernel_size = this->load_number("ffn_kernel_size");
@@ -347,15 +348,19 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
         }
 
     }
-    printf("Finished text encoder\n");
+    printf("Calculating prior and variances\n");
     // In the future add support for returning this
-    //printf("Final proj for text encoder\n");
-    auto flow_size = this->load_number("flow_size");
-    cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
+    printf("Final proj for text encoder\n");
+    auto text_encoder_output = cur;
+
+    cur = ggml_permute(ctx, text_encoder_output, 1, 0, 2, 3);
     auto stats = conv1d_with_bias(ctx, cur, model->get("project.weight"), model->get("project.bias"));
-    cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
-    auto [prior_means, prior_log_variances] = split_3d(ctx, stats, flow_size, flow_size, 2);
-    return std::make_tuple(cur, prior_means, prior_log_variances);
+    stats = ggml_permute(ctx, stats, 1, 0, 2, 3);
+    stats = ggml_view_3d(ctx, stats, stats->ne[0], stats->ne[1], stats->ne[2], stats->ne[1], stats->ne[2], 0);
+
+    auto [prior_means, prior_log_variances] = split_3d(ctx, stats, flow_size, flow_size, 0);
+    printf("Finished text encoder\n");
+    return std::make_tuple(text_encoder_output, prior_means, prior_log_variances);
 }
 
 struct ggml_tensor* add_tanh_sigmoid_multiply(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b, int num_channels) {
@@ -541,30 +546,36 @@ struct ggml_cgraph* vits_model::build_graph(struct ggml_tensor * input_ids) {
     struct ggml_tensor* speaker_embeddings = nullptr;
 
     auto [text_encoder_output, prior_means, prior_log_variances] = this->text_encoder_graph(input_ids);
-    ASSERT_SHAPE(text_encoder_output, 192, input_ids->ne[1], 1, 1);
-    ASSERT_SHAPE(prior_means, 192, input_ids->ne[1], 1, 1);
-    ASSERT_SHAPE(prior_log_variances, 192, input_ids->ne[1], 1, 1);
-    //ASSERT_STARTS_WITH(text_encoder_output, {.});
+    ASSERT_SHAPE(text_encoder_output, 192, input_ids->ne[0], 1, 0);
+    ASSERT_SHAPE(prior_means, 192, input_ids->ne[0], 1, 0);
+    ASSERT_SHAPE(prior_log_variances, 192, input_ids->ne[0], 1, 0);
+    this->text_encoder_output = text_encoder_output;
+    this->prior_means_output = prior_means;
+    this->prior_log_variances_output = prior_log_variances;
 
     auto hidden_states = text_encoder_output;
-    hidden_states = ggml_permute(ctx, hidden_states, 0, 2, 1, 3);
+    hidden_states = ggml_permute(ctx, hidden_states, 1, 0, 2, 3);
 
     ASSERT(config["use_stochastic_duration_prediction"] == "True", "Only stochastic duration prediction is supported");
     // Duration predictor
-    /*auto log_duration = stochastic_duration_predictor_graph(ctx, hidden_states, speaker_embeddings, True, noise_scale_duration);
-    auto length_scale = 1.0 / speaking_rate;
-    auto duration = ;*/
+    auto log_duration = this->stochastic_duration_predictor_graph(ctx, hidden_states, speaker_embeddings, true, noise_scale_duration);
+    auto length_scale = ggml_new_f32(ctx, 1.0 / this->speaking_rate);
+    auto duration = ggml_ceil(ctx, ggml_scale(ctx, ggml_exp(ctx, log_duration), length_scale));
+    this->log_duration_output = log_duration;
+    ASSERT_SHAPE(log_duration, 1, 1, input_ids->ne[0], 0);
+    SHAPE(duration);
+    auto predicted_lengths = clamp_min(ctx, ggml_sum(ctx, duration), 1);
 
-
-    //cum_duration = torch.cumsum(duration, -1).view(batch_size * input_length, 1)
-    //indices = torch.arange(output_length, dtype=duration.dtype, device=duration.device)
-    //valid_indices = indices.unsqueeze(0) < cum_duration
-    //valid_indices = valid_indices.to(attn_mask.dtype).view(batch_size, input_length, output_length)
-    //padded_indices = valid_indices - nn.functional.pad(valid_indices, [0, 0, 1, 0, 0, 0])[:, :-1]
-    //attn = padded_indices.unsqueeze(1).transpose(2, 3) * attn_mask
-    struct ggml_tensor* attn = ones_like(ctx, input_ids);
-    // Fill with ones
-
+    auto output_length = tensor_max(ctx, predicted_lengths);
+    auto cum_duration = cumsum(ctx, duration);
+    auto indices = ggml_arange(ctx, output_length);
+    auto valid_indices = ggml_compare_less_than(indices, cum_duration);
+    SHAPE(valid_indices);
+    auto minus = slice_3d(ctx, pad_3d(ctx, valid_indices, {0, 0, 1, 0, 0, 0}), 0, -1, 0, valid_indices->ne[1]-1, 0, -1);
+    auto padded_indices = ggml_sub(ctx, valid_indices, minus);
+    SHAPE(padded_indices);
+    struct ggml_tensor* attn = ggml_permute(ctx, padded_indices, 1, 0, 1, 2);
+    ASSERT_SHAPE(attn, 1, 1, 93, input_ids->ne[0]);
 
     prior_means = ggml_mul_mat(ctx, attn, prior_means);
     prior_means = ggml_permute(ctx, prior_means, 0, 2, 1, 3);
@@ -577,89 +588,22 @@ struct ggml_cgraph* vits_model::build_graph(struct ggml_tensor * input_ids) {
 
     auto prior_latents = ggml_add(ctx, prior_means, noise);
     auto latents = this->flow_graph(ctx, prior_latents, speaker_embeddings, true);
+    this->latents_output = latents;
+    ASSERT_SHAPE(this->latents_output, 1, 192, 93, 0);
 
     this->waveform = this->hifigan_graph(ctx, latents, speaker_embeddings);
+    ASSERT_SHAPE(this->waveform, 1, 1, 23808, 0);
 
     auto gf = ggml_build_forward_ctx(ctx, this->waveform);
 
     printf("Finished building graph\n");
 
     return gf;
-/*
-
-    struct ggml_tensor* cur = nullptr;
-    struct ggml_tensor* input_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
-
-    // Embeddings layer
-    auto hidden_states = ggml_get_rows(ctx, model->tok_embeddings, input_ids);
-    {
-
-        for (int i = 0; i < model->num_hidden_layers; i++) {
-            // Attention
-            {
-
-            }
-            // Layer norm
-            {
-                ggml_mul_mat(ctx, model->ln_f[i], hidden_states);
-            }
-            //Feed forward
-            {
-                if (config.hidden_act != "RELU") GGML_ASSERT("activation function not supported");
-            }
-            // Final layer norm
-            {
-
-            }
-        }
-    }
-
-
-    //struct ggml_tensor* hidden_states = this->text_encoder->process(input_tensor);
-
-    // Duration predictor
-    {
-
-         *        kernel_size = config.duration_predictor_kernel_size
-        filter_channels = config.duration_predictor_filter_channels
-         self.dropout = nn.Dropout(config.duration_predictor_dropout)
-        self.conv_1 = nn.Conv1d(config.hidden_size, filter_channels, kernel_size, padding=kernel_size // 2)
-        self.norm_1 = nn.LayerNorm(filter_channels, eps=config.layer_norm_eps)
-        self.conv_2 = nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size // 2)
-        self.norm_2 = nn.LayerNorm(filter_channels, eps=config.layer_norm_eps)
-        self.proj = nn.Conv1d(filter_channels, 1, 1)
-
-        cur = ggml_conv_1d_s1_ph();
-        cur = ggml_relu(cur);
-        cur = ggml_mul_mat();
-
-        cur = ggml_conv_1d_s1_ph();
-        cur = ggml_relu(cur);
-        cur = ggml_mul_mat();
-
-        cur = ggml_conv_1d_s1_ph();
-
-    }
-    //struct ggml_tensor* duration = this->duration_predictor->process(hidden_states);
-
-    // Flow
-    {
-        //config.prior_encoder_num_flows)
-        int flows = 1;
-        for(int i = flows-1; i > -1; --i)
-        {
-            //inputs = torch.flip(inputs, [1])
-            // VitsResidualCouplingLayer
-        }
-    }
-
-    //struct ggml_tensor* latents = this->flow->process(hidden_states);
-    //struct ggml_tensor* waveform = this->decoder->process(latents);
-*/
 }
 
 std::vector<uint8_t> vits_model::process(std::string phonemes) {
     // tokenize phonemes TODO
+    auto debug_mode = true;
     std::vector<int32_t> input_ids = {0, 19,  0, 39,  0, 35,  0, 35,  0, 41,  0, 27,  0, 41,  0, 43,  0, 35, 0, 29,  0};
     auto input_ids_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, input_ids.size());
     memcpy(input_ids_tensor->data, input_ids.data(), ggml_element_size(input_ids_tensor) * input_ids.size());
@@ -680,6 +624,15 @@ std::vector<uint8_t> vits_model::process(std::string phonemes) {
     auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     free(plan.work_data);
     printf("Computation took %lld milliseconds\n", delta);
+
+    if (debug_mode) {
+        ASSERT_STARTS_WITH(this->text_encoder_output, 0.1938, 0.2144, 0.1059);
+        ASSERT_STARTS_WITH(this->prior_means, 0.4238,  0.1439,  0.1764);
+        ASSERT_STARTS_WITH(this->prior_log_variances, -0.2889, -0.0325, -0.2308);
+        ASSERT_STARTS_WITH(this->latents, 0.9742,  2.0036,  1.5632);
+        ASSERT_STARTS_WITH(this->log_duration, 3.1618, -0.1879,  0.7810);
+        ASSERT_STARTS_WITH(this->waveform, -3.2723e-05, -1.2340e-05,  2.3337e-05);
+    }
 
     //ASSERT(this->last_hidden_state->ne[2] == 1, "Batch size must be 1");
     //ASSERT(this->last_hidden_state->type == GGML_TYPE_F32, "Type must be float32");
