@@ -278,6 +278,24 @@ struct ggml_tensor* ggml_exp(struct ggml_context* ctx, struct ggml_tensor* tenso
     );
 }
 
+struct ggml_tensor* ggml_pow(struct ggml_context* ctx, struct ggml_tensor* tensor, double to) {
+    ggml_custom1_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * a, int ith, int nth, void * userdata) {
+        auto op = [](float src, void* userdata) {
+            auto to = *(double*)userdata;
+            return (float)std::pow(src, to);
+        };
+        custom_op_with_data(dst, a, ith, nth, userdata, op);
+    };
+
+    return ggml_map_custom1(
+            ctx,
+            tensor,
+            func,
+            1,
+            &to
+    );
+}
+
 
 struct ggml_tensor* ggml_ceil(struct ggml_context* ctx, struct ggml_tensor* tensor) {
     ggml_custom1_op_t func = [](auto* dst, auto a, auto ith, auto nth, auto userdata) {
@@ -446,5 +464,16 @@ struct ggml_tensor* ones_like(struct ggml_context* ctx, struct ggml_tensor* othe
     return tensor;
 }
 
+struct ggml_tensor* zeros_like(struct ggml_context* ctx, struct ggml_tensor* other) {
+    return ggml_new_tensor(ctx, other->type, other->n_dims, other->ne);
+}
+
+struct ggml_tensor* index_put_last_dim(struct ggml_context* ctx, struct ggml_tensor* tensor, int index, float value) {
+
+}
+
+struct ggml_tensor* tensor_not(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+
+}
 
 #endif //VITS_CPP_GGML_UTIL_H

@@ -56,6 +56,8 @@ public:
     struct ggml_tensor* flow_graph(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse);
     struct ggml_tensor* hifigan_graph(struct ggml_context* ctx, struct ggml_tensor * input_ids, struct ggml_tensor* global_conditioning);
     struct ggml_tensor* dilated_depth_separable_conv_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning);
+    struct ggml_tensor* elementwise_affine_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse);
+    struct ggml_tensor* conv_flow_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse);
     struct ggml_tensor* stochastic_duration_predictor_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* speaker_embeddings, bool reverse, float noise_scale_duration);
     struct ggml_tensor* hifigan_residual_block_graph(struct ggml_context *ctx, struct ggml_tensor *hidden_states, int kernel_size, std::vector<int> dilation, double leaky_relu_slope);
     std::vector<uint8_t> process(std::string phonemes);
