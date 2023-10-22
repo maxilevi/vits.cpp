@@ -7,6 +7,7 @@
 
 #include <ggml/ggml.h>
 #include "debug.h"
+#include <limits>
 #include <random>
 
 struct ggml_tensor* pad_3d(struct ggml_context* ctx, struct ggml_tensor* tensor, std::vector<int> pads) {
@@ -88,11 +89,13 @@ struct ggml_tensor* slice_3d(struct ggml_context* ctx, struct ggml_tensor* tenso
     ASSERT(end2 > start2 && end2 <= tensor->ne[2], "Invalid end2 index");
 
     int64_t new_shape[3] = { end0 - start0, end1 - start1, end2 - start2 };
-    printf("new_shape: (%lld, %lld, %lld)\n", new_shape[0], new_shape[1], new_shape[2]);
     size_t nb0 = tensor->nb[0];
     size_t nb1 = nb0 * new_shape[0];
     size_t nb2 = nb1 * new_shape[1];
-    size_t offset = (start2 * tensor->ne[1] * tensor->ne[0] + start1 * tensor->ne[0] + start0) * nb0;
+    size_t offset = start2 * tensor->ne[1] * tensor->ne[0] * nb0
+                    + start1 * tensor->ne[0] * nb0
+                    + start0 * nb0;
+
 
     // Create a 3D view on the original tensor
     auto sliced_view = ggml_view_3d(ctx, tensor, new_shape[0], new_shape[1], new_shape[2], nb1, nb2, offset);
@@ -174,8 +177,6 @@ void flip_3d_custom_op(struct ggml_tensor* dst, const struct ggml_tensor* src, i
                 auto flipped = (src->ne[0] - i - 1);
                 auto dst_idx = ((flipped) * src->nb[0] + row * src->nb[1] + mat * src->nb[2]) / size;
 
-                printf("idx: %d flipped: %d  dst_idx: %d\n", idx, flipped, dst_idx);
-
                 dst_ptr[idx] = src_ptr[dst_idx];
             }
         }
@@ -188,56 +189,205 @@ struct ggml_tensor* flip_3d(struct ggml_context* ctx, struct ggml_tensor* tensor
     return ggml_map_custom1(ctx, tensor, flip_3d_custom_op, 1, &along);
 }
 
-void sigmoid_custom_op(struct ggml_tensor* dst, const struct ggml_tensor* src, int ith, int nth, void* userdata) {
-    ASSERT(src->type == GGML_TYPE_F32, "Input tensor should be fp32");
+void custom_op2(struct ggml_tensor* dst, const struct ggml_tensor* src0, const struct ggml_tensor* src1, int ith, int nth, void* userdata, std::function<float(float, float)> op) {
+    ASSERT(src0->type == GGML_TYPE_F32, "Input tensor should be fp32");
+    ASSERT(src1->type == GGML_TYPE_F32, "Input tensor should be fp32");
     ASSERT(dst->type == GGML_TYPE_F32, "Output tensor should be fp32");
     auto* dst_ptr = (float*)dst->data;
-    auto* src_ptr = (float*)src->data;
+    auto* src0_ptr = (float*)src0->data;
+    auto* src1_ptr = (float*)src1->data;
 
-    float value = src_ptr[ith];
-    dst_ptr[ith] = 1.0f / (1.0f + std::exp(-value));
-}
+    ASSERT(ggml_nelements(src0) == ggml_nelements(src1) == ggml_nelements(dst), "Input tensors should have the same size");
 
-struct ggml_tensor* ggml_sigmoid(struct ggml_context* ctx, struct ggml_tensor* tensor) {
-    return ggml_map_custom1(ctx, tensor, sigmoid_custom_op, GGML_N_TASKS_MAX, nullptr);
-}
+    size_t size = ggml_element_size(src0);
+    for (int i = 0; i < src0->ne[0]; ++i) {
+        for (int j = 0; j < src0->ne[1]; ++j) {
+            for (int k = 0; k < src0->ne[2]; ++k) {
+                for (int w = 0; w < src0->ne[3]; ++w) {
 
+                    auto idx0 = (i * src0->nb[0] + j * src0->nb[1] + k * src0->nb[2] + w * src0->nb[3]) / size;
+                    auto idx1 = (i * src1->nb[0] + j * src1->nb[1] + k * src1->nb[2] + w * src1->nb[3]) / size;
+                    auto dst_idx = (i * dst->nb[0] + j * dst->nb[1] + k * dst->nb[2] + w * dst->nb[3]) / size;
 
-void exp_custom_op(struct ggml_tensor* dst, const struct ggml_tensor* src, int ith, int nth, void* userdata) {
-    ASSERT(src->type == GGML_TYPE_F32, "Input tensor should be fp32");
-    ASSERT(dst->type == GGML_TYPE_F32, "Output tensor should be fp32");
-    auto* dst_ptr = (float*)dst->data;
-    auto* src_ptr = (float*)src->data;
-
-    dst_ptr[ith] = std::exp(src_ptr[nth]);
-}
-
-struct ggml_tensor* ggml_exp(struct ggml_context* ctx, struct ggml_tensor* tensor) {
-    return ggml_map_custom1(ctx, tensor, exp_custom_op, GGML_N_TASKS_MAX, nullptr);
-}
-
-// 4. leaky_relu
-struct LeakyReLUParams {
-    double slope;
-};
-
-void leaky_relu_custom_op(struct ggml_tensor* dst, const struct ggml_tensor* src, int ith, int nth, void* userdata) {
-    ASSERT(src->type == GGML_TYPE_F32, "Input tensor should be fp32");
-    ASSERT(dst->type == GGML_TYPE_F32, "Output tensor should be fp32");
-    auto* dst_ptr = (float*)dst->data;
-    auto* src_ptr = (float*)src->data;
-
-    auto params = (LeakyReLUParams*)userdata;
-    if (src_ptr[ith] > 0) {
-        dst_ptr[ith] = src_ptr[ith];
-    } else {
-        dst_ptr[ith] = params->slope * src_ptr[ith];
+                    dst_ptr[dst_idx] = op(src0_ptr[idx0], src1_ptr[idx1]);
+                }
+            }
+        }
     }
 }
 
+void custom_op_with_data(struct ggml_tensor* dst, const struct ggml_tensor* src, int ith, int nth, void* userdata, std::function<float(float, void*)> op) {
+    ASSERT(src->type == GGML_TYPE_F32, "Input tensor should be fp32");
+    ASSERT(dst->type == GGML_TYPE_F32, "Output tensor should be fp32");
+    auto* dst_ptr = (float*)dst->data;
+    auto* src_ptr = (float*)src->data;
+
+    ASSERT(ggml_nelements(src) == ggml_nelements(dst), "Input tensors should have the same size");
+
+    size_t size = ggml_element_size(src);
+    for (int w = 0; w < src->ne[3]; ++w) {
+        for (int k = 0; k < src->ne[2]; ++k) {
+            for (int j = 0; j < src->ne[1]; ++j) {
+                for (int i = 0; i < src->ne[0]; ++i) {
+                    auto idx = (i * src->nb[0] + j * src->nb[1] + k * src->nb[2] + w * src->nb[3]) / size;
+                    printf("%d \n", idx);
+                    auto dst_idx = (i * dst->nb[0] + j * dst->nb[1] + k * dst->nb[2] + w * dst->nb[3]) / size;
+
+                    dst_ptr[dst_idx] = op(src_ptr[idx], userdata);
+                }
+            }
+        }
+    }
+}
+
+void custom_op(struct ggml_tensor* dst, const struct ggml_tensor* src, int ith, int nth, void* userdata, float (*op)(float)) {
+    custom_op_with_data(dst, src, ith, nth, userdata, [op](float src, void* userdata) {
+        return op(src);
+    });
+}
+
+struct ggml_tensor* ggml_sigmoid(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+    ggml_custom1_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * a, int ith, int nth, void * userdata) {
+        auto sigmoid_custom_op = [](float src) {
+            return 1.0f / (1.0f + std::exp(-src));
+        };
+        return custom_op(dst, a, ith, nth, nullptr, sigmoid_custom_op);
+    };
+
+    return ggml_map_custom1(
+            ctx,
+            tensor,
+            func,
+            1,
+            nullptr
+    );
+}
+
+
+struct ggml_tensor* ggml_exp(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+    ggml_custom1_op_t func = [](auto* dst, auto a, auto ith, auto nth, auto userdata) {
+        custom_op(dst, a, ith, nth, nullptr, std::exp);
+    };
+
+    return ggml_map_custom1(
+            ctx,
+            tensor,
+            func,
+            1,
+            nullptr
+    );
+}
+
+
+struct ggml_tensor* ggml_ceil(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+    ggml_custom1_op_t func = [](auto* dst, auto a, auto ith, auto nth, auto userdata) {
+        custom_op(dst, a, ith, nth, nullptr, std::ceil);
+    };
+
+    return ggml_map_custom1(
+            ctx,
+            tensor,
+            func,
+            1,
+            nullptr
+    );
+}
+
 struct ggml_tensor* leaky_relu(struct ggml_context* ctx, struct ggml_tensor* tensor, double slope) {
-    LeakyReLUParams params = { slope };
-    return ggml_map_custom1(ctx, tensor, leaky_relu_custom_op, tensor->ne[1], &params);
+    ggml_custom1_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * a, int ith, int nth, void * userdata) {
+        auto leaky_relu_custom_op = [](float src, void* userdata) {
+            auto slope = *(double*)userdata;
+            return (float)((src > 0) ? src : src * slope);
+        };
+        custom_op_with_data(dst, a, ith, nth, userdata, leaky_relu_custom_op);
+    };
+
+    return ggml_map_custom1(
+            ctx,
+            tensor,
+            func,
+            1,
+            &slope
+    );
+}
+
+struct ggml_tensor* cumsum(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+
+    ggml_custom1_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * a, int ith, int nth, void * userdata) {
+        float cum = 0;
+        auto clamp_min_op = [&cum](float src, void* userdata) {
+            cum += src;
+            return cum;
+        };
+        custom_op_with_data(dst, a, ith, nth, userdata, clamp_min_op);
+    };
+
+    return ggml_map_custom1(
+            ctx,
+            tensor,
+            func,
+            1,
+            nullptr
+    );
+}
+
+struct ggml_tensor* tensor_max(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+    ggml_custom1_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * a, int ith, int nth, void * userdata) {
+        float current_max = std::numeric_limits<float>::min();
+        auto op = [&current_max](float src, void* userdata) {
+            current_max = std::max(current_max, src);
+            return current_max;
+        };
+        custom_op_with_data(dst, a, ith, nth, userdata, op);
+    };
+
+    return ggml_map_custom1(
+            ctx,
+            tensor,
+            func,
+            1,
+            nullptr
+    );
+}
+
+struct ggml_tensor* arange(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+    ASSERT(false, "fixme")
+    auto output = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+
+    ggml_custom2_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * a, const struct ggml_tensor * b, int ith, int nth, void * userdata) {
+        int index = 0;
+        auto op = [&index](float src0, float src1) {
+            return (float) index++;
+        };
+        custom_op2(dst, a, b, ith, nth, userdata, op);
+    };
+
+    return ggml_map_custom2(
+            ctx,
+            output,
+            tensor,
+            func,
+            1,
+            nullptr
+    );
+}
+
+struct ggml_tensor* compare_less_than(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b) {
+    ggml_custom2_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * a, const struct ggml_tensor * b, int ith, int nth, void * userdata) {
+        auto op = [](float src0, float src1) {
+            return src0 < src1 ? 1.0f : 0.0f;
+        };
+        custom_op2(dst, a, b, ith, nth, userdata, op);
+    };
+
+    return ggml_map_custom2(
+            ctx,
+            a,
+            b,
+            func,
+            1,
+            nullptr
+    );
 }
 
 struct ggml_tensor* concat_3d(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b, int dim) {
@@ -266,8 +416,8 @@ struct ggml_tensor* concat_3d(struct ggml_context* ctx, struct ggml_tensor* a, s
     return result;
 }
 
-struct ggml_tensor* randn_like(struct ggml_context* ctx, struct ggml_tensor* other) {
-    auto tensor = ggml_new_tensor(ctx, other->type, other->n_dims, other->ne);
+struct ggml_tensor* randn(struct ggml_context* ctx, std::vector<int64_t> dims) {
+    auto tensor = ggml_new_tensor(ctx, GGML_TYPE_F32, dims.size(), dims.data());
     auto data = static_cast<float*>(tensor->data);
     auto size = ggml_nelements(tensor) ;
     std::mt19937 rng;
@@ -276,6 +426,14 @@ struct ggml_tensor* randn_like(struct ggml_context* ctx, struct ggml_tensor* oth
         data[i] = dist(rng);
     }
     return tensor;
+}
+
+struct ggml_tensor* randn_like(struct ggml_context* ctx, struct ggml_tensor* other) {
+    std::vector<int64_t> dims;
+    for (int i = 0; i < other->n_dims; ++i) {
+        dims.push_back(other->ne[i]);
+    }
+    return randn(ctx, dims);
 }
 
 struct ggml_tensor* ones_like(struct ggml_context* ctx, struct ggml_tensor* other) {

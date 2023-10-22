@@ -66,15 +66,22 @@ void assert_tensor_matches_expected(
 
     auto data = (float*) ggml_get_data(tensor);
     bool equal = true;
+    printf("Data: [");
+    auto index = 0;
+    for (int64_t i = 0; i < tensor->ne[2]; ++i) {
+        for (int64_t j = 0; j < tensor->ne[1]; ++j) {
+            for (int64_t k = 0; k < tensor->ne[0]; ++k) {
+                size_t offset = (k * tensor->nb[0] + j * tensor->nb[1] + i * tensor->nb[2]) / sizeof(float);
+                std::cout << *(data + offset) << " (" << offset << ") ";
+                auto val = *(data + offset);
+                equal &= (val - expected[index++]) < 1e-5;
+            }
+        }
+    }
+    printf("]\n");
     printf("Expected: [");
     for (int i = 0; i < total_elements; ++i) {
         printf("%d ", expected[i]);
-        equal &= data[i] == expected[i];
-    }
-    printf("]\n");
-    printf("Data: [");
-    for (int i = 0; i < total_elements; ++i) {
-        printf("%f ", data[i]);
     }
     printf("]\n");
 
@@ -171,6 +178,51 @@ void assert_concat_is_correct(
     std::cout << "Concat is correct\n";
 }
 
+void assert_cumsum_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* tensor,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing Cumsum" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, cumsum(ctx, tensor));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Cumsum");
+
+    std::cout << "Cumsum is correct\n";
+}
+
+void assert_max_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* tensor,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing Max" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_max(ctx, tensor));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Max");
+
+    std::cout << "Max is correct\n";
+}
+
+void assert_arange_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* range,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing arange" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, arange(ctx, range));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "arange");
+
+    std::cout << "arange is correct\n";
+}
+
 struct ggml_tensor * create_tensor_with_data_and_shape(struct ggml_context * ctx, const std::vector<float>& data, int h, int w, int d) {
     auto tensor = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, h, w, d);
     memcpy(tensor->data, data.data(), ggml_element_size(tensor) * data.size());
@@ -218,7 +270,6 @@ int main(int argc, char ** argv) {
     assert_split_is_correct(ctx, input_ids_tensor, 2, 1, 0,
                             {1, 2, 3, 4}, {2, 2, 1},
                             {5, 6}, {1, 2, 1});
-
     // Flip
     print_tensor(input_ids_tensor, "Input");
     assert_flip_is_correct(ctx, input_ids_tensor, 1, {3, 2, 1, 6, 5, 4}, {3, 2, 1});
@@ -227,6 +278,14 @@ int main(int argc, char ** argv) {
     auto tensor_b = create_tensor_with_data_and_shape(ctx, {1, 7, 8}, 3, 1, 1);
 
     assert_concat_is_correct(ctx, tensor_b, tensor_a, 1, {1, 7, 8, 1, 2, 3}, {3, 2, 1});
+
+    auto tensor_d = create_tensor_with_data_and_shape(ctx, {1, 2, 3}, 3, 1, 1);
+    assert_cumsum_is_correct(ctx, tensor_d, {1, 3, 6}, {3, 1, 1});
+
+    auto tensor_c = create_tensor_with_data_and_shape(ctx, {6, 2, 3, 8, 4, 2}, 3, 2, 1);
+    assert_max_is_correct(ctx, tensor_c, {6, 6, 6, 8, 8, 8}, {3, 2, 1});
+
+    //assert_arange_is_correct(ctx, ggml_new_f32(ctx, 6), {0, 1, 2, 3, 4, 5}, {6, 1, 1});
 
     return 0;
 }

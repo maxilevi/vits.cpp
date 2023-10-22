@@ -32,10 +32,10 @@ do { \
 #define ASSERT_SHAPE(tensor, dim0, dim1, dim2, dim3) \
     do { \
         std::vector<int64_t> expected_shape;         \
-        expected_shape.push_back(dim0);              \
-        expected_shape.push_back(dim1);              \
-        expected_shape.push_back(dim2);              \
-        expected_shape.push_back(dim3);              \
+        if (dim0) expected_shape.push_back(dim0);              \
+        if (dim1) expected_shape.push_back(dim1);              \
+        if (dim2) expected_shape.push_back(dim2);              \
+        if (dim3) expected_shape.push_back(dim3);              \
         printf("Assert shape (");                    \
         for (int i = 0; i < tensor->n_dims; ++i) { \
             printf("%d", tensor->ne[i]); \
@@ -52,6 +52,11 @@ do { \
             ASSERT(tensor->ne[i] == expected_shape[i], "Shape mismatch"); \
         } \
 } while(0);
+
+#define ASSERT_STARTS_WITH(tensor, val0, val1, val2) \
+    do { \
+        printf("TODO"); \
+    } while(0);
 
 
 #define PRINT_TENSOR2(tensor)                                 \
