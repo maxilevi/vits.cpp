@@ -534,7 +534,44 @@ struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct g
     return waveform;
 }
 
-struct ggml_tensor* vits_model::stochastic_duration_predictor_graph(struct ggml_context* ctx, struct ggml_tensor * input_ids, struct ggml_tensor* speaker_embeddings, bool reverse, float noise_scale_duration) {
+struct ggml_tensor* vits_model::dilated_depth_separable_conv_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning) {
+    auto kernel_size = this->load_number("duration_predictor_kernel_size");
+    auto num_layers = this->load_number("depth_separable_num_layers");
+
+    if (global_conditioning != nullptr)
+        inputs = ggml_add(ctx, inputs, global_conditioning);
+
+    for(int i = 0; i < num_layers; ++i) {
+        auto conv_dilated_i_weight = this->model->get("convs_dilated." + std::to_string(i) + ".weight");
+        auto conv_dilated_i_bias = this->model->get("convs_dilated." + std::to_string(i) + ".bias");
+        auto hidden_states = conv1d_with_bias(ctx, inputs, conv_dilated_i_weight, conv_dilated_i_bias);
+
+        auto norm1_i_weight = this->model->get("norm1." + std::to_string(i) + ".weight");
+        auto norm1_i_bias = this->model->get("norm1." + std::to_string(i) + ".bias");
+        hidden_states = ggml_permute(ctx, hidden_states, 2, 0, 1, 3);
+        hidden_states = layer_norm(ctx, hidden_states, norm1_i_weight, norm1_i_bias);
+        hidden_states = ggml_permute(ctx, hidden_states, 2, 0, 1, 3);
+
+        hidden_states = ggml_gelu(ctx, hidden_states);
+
+        auto dilation = pow(kernel_size, i);
+        auto padding = (int) ((kernel_size * dilation - dilation) / 2);
+        auto conv_pointwise_i_weight = this->model->get("convs_pointwise." + std::to_string(i) + ".weight");
+        auto conv_pointwise_i_bias = this->model->get("convs_pointwise." + std::to_string(i) + ".bias");
+        hidden_states = conv1d_with_bias(ctx, hidden_states, conv_pointwise_i_weight, conv_pointwise_i_bias, 1, padding, dilation);
+
+        auto norm2_i_weight = this->model->get("norm2." + std::to_string(i) + ".weight");
+        auto norm2_i_bias = this->model->get("norm2." + std::to_string(i) + ".bias");
+        hidden_states = ggml_permute(ctx, hidden_states, 2, 0, 1, 3);
+        hidden_states = layer_norm(ctx, hidden_states, norm2_i_weight, norm2_i_bias);
+        hidden_states = ggml_permute(ctx, hidden_states, 2, 0, 1, 3);
+
+        hidden_states = ggml_gelu(ctx, hidden_states);
+        inputs = ggml_add(ctx, inputs, hidden_states);
+    }
+    return inputs
+}
+
     ASSERT(reverse, "Non reverse not supported");
 }
 
