@@ -19,6 +19,11 @@ private:
     struct ggml_context * ctx;
     struct ggml_tensor * last_hidden_state;
     struct ggml_tensor * waveform;
+    struct ggml_tensor * text_encoder_output;
+    struct ggml_tensor * prior_means_output;
+    struct ggml_tensor * prior_log_variances_output;
+    struct ggml_tensor * log_duration_output;
+    struct ggml_tensor * latents_output;
     int load_number(std::string key);
     float load_float(std::string key);
     std::string load_param(std::string key);
@@ -50,7 +55,8 @@ public:
     struct ggml_tensor* wavenet_graph(struct ggml_tensor* input, struct ggml_tensor* speaker_embedding);
     struct ggml_tensor* flow_graph(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse);
     struct ggml_tensor* hifigan_graph(struct ggml_context* ctx, struct ggml_tensor * input_ids, struct ggml_tensor* global_conditioning);
-    struct ggml_tensor* stochastic_duration_predictor_graph(struct ggml_context* ctx, struct ggml_tensor * input_ids, struct ggml_tensor* speaker_embeddings, bool reverse, float noise_scale_duration);
+    struct ggml_tensor* dilated_depth_separable_conv_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning);
+    struct ggml_tensor* stochastic_duration_predictor_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* speaker_embeddings, bool reverse, float noise_scale_duration);
     struct ggml_tensor* hifigan_residual_block_graph(struct ggml_context *ctx, struct ggml_tensor *hidden_states, int kernel_size, std::vector<int> dilation, double leaky_relu_slope);
     std::vector<uint8_t> process(std::string phonemes);
 };

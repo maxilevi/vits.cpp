@@ -47,7 +47,7 @@ float vits_model::load_float(std::string key) {
 
 //https://github.com/huggingface/transformers/blob/09b2de6eb74b1e5ff4f4c3d9839485f4165627c9/src/transformers/models/vits/modeling_vits.py#L1356
 
-struct ggml_tensor* layer_norm(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* weight, struct ggml_tensor* bias, float eps) {
+struct ggml_tensor* layer_norm(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* weight, struct ggml_tensor* bias, float eps=1e-5) {
     auto cur = ggml_norm(ctx, input, eps);
     cur = ggml_mul(ctx, cur, weight);
     cur = ggml_add(ctx, cur, bias);
@@ -572,7 +572,38 @@ struct ggml_tensor* vits_model::dilated_depth_separable_conv_graph(struct ggml_c
     return inputs
 }
 
+struct ggml_tensor* vits_model::stochastic_duration_predictor_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse, float noise_scale_duration) {
     ASSERT(reverse, "Non reverse not supported");
+    printf("Building stochastic duration predictor\n");
+    auto duration_predictor_num_flows = this->load_number("duration_predictor_num_flows");
+    auto _ = this->model->use("duration_predictor");
+    struct ggml_tensor* log_duration = nullptr;
+
+    inputs = conv1d_with_bias(ctx, inputs, this->model->get("conv_pre.weight"), this->model->get("conv_pre.bias"));
+    if (global_conditioning != nullptr)
+        ASSERT(false, "TODO global_conditioning");
+
+    {
+        auto _0 = model->use("conv_dds");
+        inputs = this->dilated_depth_separable_conv_graph(ctx, inputs);
+    }
+    inputs = conv1d_with_bias(ctx, inputs, this->model->get("conv_proj.weight"), this->model->get("conv_proj.bias"));
+    if (!reverse) {
+        ASSERT(reverse, "Non reverse not supported");
+    } else {
+        auto latents = randn(ctx, {inputs->ne[0], 2, inputs->ne[2]});
+        latents = ggml_scale(ctx, latents, ggml_new_f32(ctx, noise_scale_duration));
+        for(int i = duration_predictor_num_flows-1; i > -1; i--) {
+            if (i == 1) continue;
+
+            latents = flip_3d(ctx, latents, 1);
+            auto _0 = model->use("flows." + std::to_string(i));
+            latents = this->dilated_depth_separable_conv(ctx, latents, global_conditioning, reverse);
+        }
+        auto [log_duration_tensor, _] = split_3d(ctx, latents, 1, 1, 0);
+        log_duration = log_duration_tensor;
+    }
+    return log_duration;
 }
 
 
@@ -594,19 +625,18 @@ struct ggml_cgraph* vits_model::build_graph(struct ggml_tensor * input_ids) {
     hidden_states = ggml_permute(ctx, hidden_states, 1, 0, 2, 3);
 
     ASSERT(config["use_stochastic_duration_prediction"] == "True", "Only stochastic duration prediction is supported");
-    // Duration predictor
     auto log_duration = this->stochastic_duration_predictor_graph(ctx, hidden_states, speaker_embeddings, true, noise_scale_duration);
     auto length_scale = ggml_new_f32(ctx, 1.0 / this->speaking_rate);
     auto duration = ggml_ceil(ctx, ggml_scale(ctx, ggml_exp(ctx, log_duration), length_scale));
     this->log_duration_output = log_duration;
     ASSERT_SHAPE(log_duration, 1, 1, input_ids->ne[0], 0);
     SHAPE(duration);
-    auto predicted_lengths = clamp_min(ctx, ggml_sum(ctx, duration), 1);
+    auto predicted_lengths = ggml_clamp(ctx, ggml_sum(ctx, duration), 1, std::numeric_limits<float>::max());
 
     auto output_length = tensor_max(ctx, predicted_lengths);
     auto cum_duration = cumsum(ctx, duration);
-    auto indices = ggml_arange(ctx, output_length);
-    auto valid_indices = ggml_compare_less_than(indices, cum_duration);
+    auto indices = arange(ctx, output_length);
+    auto valid_indices = compare_less_than(ctx, indices, cum_duration);
     SHAPE(valid_indices);
     auto minus = slice_3d(ctx, pad_3d(ctx, valid_indices, {0, 0, 1, 0, 0, 0}), 0, -1, 0, valid_indices->ne[1]-1, 0, -1);
     auto padded_indices = ggml_sub(ctx, valid_indices, minus);
