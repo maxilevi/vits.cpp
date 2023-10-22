@@ -278,7 +278,27 @@ struct ggml_tensor* ggml_exp(struct ggml_context* ctx, struct ggml_tensor* tenso
     );
 }
 
-struct ggml_tensor* ggml_pow(struct ggml_context* ctx, struct ggml_tensor* tensor, double to) {
+struct ggml_tensor* softplus(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+    ggml_custom1_op_t func = [](auto* dst, auto a, auto ith, auto nth, auto userdata) {
+        custom_op(dst, a, ith, nth, nullptr, [](float x) {
+            const float beta = 1.0;
+            const float threshold = 20;
+            if (x > threshold)
+                return beta * x;
+            return (float) (1.0f / beta * std::log(1.0 + std::exp(beta * x)));
+        });
+    };
+
+    return ggml_map_custom1(
+            ctx,
+            tensor,
+            func,
+            1,
+            nullptr
+    );
+}
+
+struct ggml_tensor* tensor_pow(struct ggml_context* ctx, struct ggml_tensor* tensor, double to) {
     ggml_custom1_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * a, int ith, int nth, void * userdata) {
         auto op = [](float src, void* userdata) {
             auto to = *(double*)userdata;
@@ -390,10 +410,11 @@ struct ggml_tensor* arange(struct ggml_context* ctx, struct ggml_tensor* tensor)
     );
 }
 
-struct ggml_tensor* compare_less_than(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b) {
+struct ggml_tensor* tensor_compare(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b, std::function<bool(float, float)> compare_op) {
     ggml_custom2_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * a, const struct ggml_tensor * b, int ith, int nth, void * userdata) {
-        auto op = [](float src0, float src1) {
-            return src0 < src1 ? 1.0f : 0.0f;
+        auto func = *((std::function<bool(float, float)>*) userdata);
+        auto op = [&func](float src0, float src1) {
+            return func(src0, src1) ? 1.0f : 0.0f;
         };
         custom_op2(dst, a, b, ith, nth, userdata, op);
     };
@@ -404,7 +425,7 @@ struct ggml_tensor* compare_less_than(struct ggml_context* ctx, struct ggml_tens
             b,
             func,
             1,
-            nullptr
+            &compare_op
     );
 }
 
@@ -454,26 +475,48 @@ struct ggml_tensor* randn_like(struct ggml_context* ctx, struct ggml_tensor* oth
     return randn(ctx, dims);
 }
 
-struct ggml_tensor* ones_like(struct ggml_context* ctx, struct ggml_tensor* other) {
+struct ggml_tensor* tensor_like(struct ggml_context* ctx, struct ggml_tensor* other, float value) {
     auto tensor = ggml_new_tensor(ctx, other->type, other->n_dims, other->ne);
     auto data = static_cast<float*>(tensor->data);
     auto size = ggml_nelements(tensor) ;
     for (int i = 0; i < size; ++i) {
-        data[i] = 1.0f;
+        data[i] = value;
     }
     return tensor;
 }
+
+struct ggml_tensor* ones_like(struct ggml_context* ctx, struct ggml_tensor* other) {
+    return tensor_like(ctx, other, 1.0f);
+}
+
 
 struct ggml_tensor* zeros_like(struct ggml_context* ctx, struct ggml_tensor* other) {
     return ggml_new_tensor(ctx, other->type, other->n_dims, other->ne);
 }
 
 struct ggml_tensor* index_put_last_dim(struct ggml_context* ctx, struct ggml_tensor* tensor, int index, float value) {
+    // our index is actually 0
+}
+
+struct ggml_tensor* index_add_last_dim(struct ggml_context* ctx, struct ggml_tensor* tensor, int index, float value) {
+    // our index is actually 0
+}
+
+struct ggml_tensor* gather(struct ggml_context* ctx, struct ggml_tensor* tensor, int dim, struct ggml_tensor* index) {
 
 }
 
 struct ggml_tensor* tensor_not(struct ggml_context* ctx, struct ggml_tensor* tensor) {
 
 }
+
+struct ggml_tensor* ggml_masked_set(struct ggml_context* ctx, struct ggml_tensor* tensor, struct ggml_tensor* mask, struct ggml_tensor* value) {
+
+}
+
+struct ggml_tensor* ggml_masked_get(struct ggml_context* ctx, struct ggml_tensor* tensor, struct ggml_tensor* mask) {
+
+}
+
 
 #endif //VITS_CPP_GGML_UTIL_H

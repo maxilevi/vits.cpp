@@ -572,50 +572,6 @@ struct ggml_tensor* vits_model::dilated_depth_separable_conv_graph(struct ggml_c
     return inputs;
 }
 
-struct ggml_tensor* unconstrained_rational_quadratic_spline(
-        struct ggml_context* ctx,
-        struct ggml_tensor* inputs,
-        struct ggml_tensor* unnormalized_widths,
-        struct ggml_tensor* unnormalized_heights,
-        struct ggml_tensor* unnormalized_derivatives,
-        bool reverse = false,
-        float tail_bound = 5.0,
-        float min_bin_width = 1e-3,
-        float min_bin_height = 1e-3,
-        float min_derivative = 1e-3)
-{
-    ASSERT(reverse, "Non reverse not supported");
-    auto inputs_more_than_min = compare_less_than(ctx, ggml_scale(ctx, tail_bound, ggml_new_f32(ctx, -1)), inputs);
-    auto inputs_less_than_max = compare_less_than_or_equal(ctx, inputs, tail_bound);
-
-    auto inside_interval_mask = ggml_mul(ctx, inputs_less_than_max, inputs_more_than_min);
-    auto outside_interval_mask = tensor_not(ctx, inside_interval_mask);
-
-    auto outputs = zeros_like(ctx, inputs);
-    float constant = std::log(std::exp(1 - min_derivative) - 1);
-
-    unnormalized_derivatives = torch::nn::functional::pad(unnormalized_derivatives, {1, 1});
-    unnormalized_derivatives =index_put_last_dim(ctx, unnormalized_derivatives, 0, constant);
-    unnormalized_derivatives = index_put_last_dim(ctx, unnormalized_derivatives, -1, constant);
-
-    outputs.masked_fill_(outside_interval_mask, inputs);
-
-
-    auto result = rational_quadratic_spline(
-            inputs.masked_select(inside_interval_mask),
-            unnormalized_widths.index({"...", ":", inside_interval_mask}),
-            unnormalized_heights.index({"...", ":", inside_interval_mask}),
-            unnormalized_derivatives.index({"...", ":", inside_interval_mask}),
-            reverse,
-            tail_bound,
-            min_bin_width,
-            min_bin_height,
-            min_derivative
-    );
-
-    outputs.masked_scatter_(inside_interval_mask, std::get<0>(result));
-    return outputs;
-}
 
 struct ggml_tensor* rational_quadratic_spline(
         struct ggml_context* ctx,
@@ -641,64 +597,117 @@ struct ggml_tensor* rational_quadratic_spline(
 
 
     auto widths = ggml_soft_max(ctx, unnormalized_widths);
-    widths = ggml_scale(ctx, widths, ggml_new_f32(ctx, min_bin_width + (1 - min_bin_width * num_bins));
-    auto cumwidths = cumsum(widths);
-   /*
-    cumwidths = nn.functional.pad(cumwidths, pad=(1, 0), mode="constant", value=0.0)
-    cumwidths = (upper_bound - lower_bound) * cumwidths + lower_bound
-    cumwidths[..., 0] = lower_bound
-    cumwidths[..., -1] = upper_bound
-    widths = cumwidths[..., 1:] - cumwidths[..., :-1]
+    widths = ggml_scale(ctx, widths, ggml_new_f32(ctx, min_bin_width + (1 - min_bin_width * num_bins)));
+    auto cumwidths = cumsum(ctx, widths);
 
-    derivatives = min_derivative + nn.functional.softplus(unnormalized_derivatives)
+    cumwidths = pad_3d(ctx, cumwidths, {1, 0, 0, 0, 0, 0});
+    cumwidths = ggml_add(ctx, ggml_scale(ctx, cumwidths, ggml_new_f32(ctx, upper_bound - lower_bound)), ggml_new_f32(ctx, lower_bound));
+    cumwidths = index_put_last_dim(ctx, cumwidths, 0, lower_bound);
+    cumwidths = index_put_last_dim(ctx, cumwidths, -1, upper_bound);
+    widths = ggml_sub(ctx,
+                      slice_3d(ctx, cumwidths, 1, -1, 0, -1, 0, -1),
+                      slice_3d(ctx, cumwidths, 0, -2, 0, -1, 0, -1)
+    );
 
-    heights = nn.functional.softmax(unnormalized_heights, dim=-1)
-    heights = min_bin_height + (1 - min_bin_height * num_bins) * heights
-    cumheights = torch.cumsum(heights, dim=-1)
-    cumheights = nn.functional.pad(cumheights, pad=(1, 0), mode="constant", value=0.0)
-    cumheights = (upper_bound - lower_bound) * cumheights + lower_bound
-    cumheights[..., 0] = lower_bound
-    cumheights[..., -1] = upper_bound
-    heights = cumheights[..., 1:] - cumheights[..., :-1]
+    auto derivatives = ggml_add(ctx, softplus(ctx, unnormalized_derivatives), ggml_new_f32(ctx, min_derivative));
 
-    bin_locations = cumheights if reverse else cumwidths
-    bin_locations[..., -1] += 1e-6
-    bin_idx = torch.sum(inputs[..., None] >= bin_locations, dim=-1) - 1
-    bin_idx = bin_idx[..., None]
+    auto heights = ggml_soft_max(ctx, unnormalized_heights);
+    heights = ggml_add(ctx, ggml_scale(ctx, heights, ggml_new_f32(ctx, (1 - min_bin_height * num_bins))), ggml_new_f32(ctx, min_bin_height));
+    auto cumheights = cumsum(ctx, heights);
 
-    input_cumwidths = cumwidths.gather(-1, bin_idx)[..., 0]
-    input_bin_widths = widths.gather(-1, bin_idx)[..., 0]
+    cumheights = ggml_add(ctx, ggml_scale(ctx, cumheights, ggml_new_f32(ctx, upper_bound - lower_bound)), ggml_new_f32(ctx, lower_bound));
+    cumheights =index_put_last_dim(ctx, cumheights, 0, lower_bound);
+    cumheights = index_put_last_dim(ctx, cumheights, -1, upper_bound);
+    heights = ggml_sub(ctx,
+                       slice_3d(ctx, cumheights, 1, -1, 0, -1, 0, -1),
+                       slice_3d(ctx, cumheights, 0, -2, 0, -1, 0, -1)
+    );
 
-    input_cumheights = cumheights.gather(-1, bin_idx)[..., 0]
-    delta = heights / widths
-    input_delta = delta.gather(-1, bin_idx)[..., 0]
+    auto bin_locations = reverse ? cumheights : cumwidths;
+    bin_locations = index_add_last_dim(ctx, bin_locations, -1, 1e-6);
 
-    input_derivatives = derivatives.gather(-1, bin_idx)[..., 0]
-    input_derivatives_plus_one = derivatives[..., 1:].gather(-1, bin_idx)[..., 0]
+    SHAPE(bin_locations);
 
-    input_heights = heights.gather(-1, bin_idx)[..., 0]
+    auto bin_idx = ggml_sub(ctx, ggml_sum_rows(ctx, tensor_compare(ctx, bin_locations, inputs, [](float a, float b) { return a <= b; })), ggml_new_f32(ctx, 1));
 
-    intermediate1 = input_derivatives + input_derivatives_plus_one - 2 * input_delta
-    */
+    auto input_cumwidths = slice_3d(ctx, gather(ctx, cumwidths, 0, bin_idx), 0, 1, 0, -1, 0, -1);
+    auto input_bin_widths = slice_3d(ctx, gather(ctx, widths, 0, bin_idx), 0, 1, 0, -1, 0, -1);
+
+    auto input_cumheights = slice_3d(ctx, gather(ctx, cumheights, 0, bin_idx), 0, 1, 0, -1, 0, -1);
+
+    auto delta = ggml_div(ctx, heights, widths);
+    auto input_delta = slice_3d(ctx, gather(ctx, delta, 0, bin_idx), 0, 1, 0, -1, 0, -1);
+
+
+    auto input_derivatives = slice_3d(ctx, gather(ctx, derivatives, 0, bin_idx), 0, 1, 0, -1, 0, -1);
+    auto input_derivatives_plus_one = slice_3d(ctx, gather(ctx, slice_3d(ctx, derivatives, 0, 1, 0, -1, 0, -1), 0, bin_idx), 0, 1, 0, -1, 0, -1);
+
+    auto input_heights = slice_3d(ctx, gather(ctx, heights, 0, bin_idx), 0, 1, 0, -1, 0, -1);
+
     auto intermediate1 = ggml_sub(ctx, ggml_add(ctx, input_derivatives, input_derivatives_plus_one), ggml_scale(ctx, input_delta, ggml_new_f32(ctx, 2)));
+    struct ggml_tensor* outputs = nullptr;
     if (!reverse) {
         ASSERT(false, "Non reverse not supported");
     } else {
         auto intermediate2 = ggml_sub(ctx, inputs, input_cumheights);
-        auto intermediate3 = ggml_mul(intermediate2, intermediate1);
+        auto intermediate3 = ggml_mul(ctx, intermediate2, intermediate1);
         auto a = ggml_add(ctx, ggml_mul(ctx, input_heights, ggml_sub(ctx, input_delta, input_derivatives)), intermediate3);
-        auto b = ggml_sub(ggml_mul(ctx, input_heights, input_derivatives), intermediate3);
+        auto b = ggml_sub(ctx, ggml_mul(ctx, input_heights, input_derivatives), intermediate3);
         auto c = ggml_mul(ctx, ggml_neg(ctx, input_delta), intermediate2);
 
         auto discriminant = ggml_sub(ctx, tensor_pow(ctx, b, 2), ggml_mul(ctx, ggml_scale(ctx, ggml_new_f32(ctx, 4), a), c));
         auto root = ggml_div(ctx,
                              ggml_scale(ctx, c, ggml_new_f32(ctx, 2)),
                              ggml_sub(ctx, ggml_neg(ctx, b), ggml_sqrt(ctx, discriminant))
-                     );
-        auto outputs = ggml_add(ctx, ggml_mul(ctx, root, input_bin_widths), input_cumwidths);
-        return outputs
+        );
+        outputs = ggml_add(ctx, ggml_mul(ctx, root, input_bin_widths), input_cumwidths);
     }
+    return outputs;
+}
 
+struct ggml_tensor* unconstrained_rational_quadratic_spline(
+        struct ggml_context* ctx,
+        struct ggml_tensor* inputs,
+        struct ggml_tensor* unnormalized_widths,
+        struct ggml_tensor* unnormalized_heights,
+        struct ggml_tensor* unnormalized_derivatives,
+        bool reverse = false,
+        float tail_bound = 5.0,
+        float min_bin_width = 1e-3,
+        float min_bin_height = 1e-3,
+        float min_derivative = 1e-3)
+{
+    ASSERT(reverse, "Non reverse not supported");
+    auto inputs_more_than_min = tensor_compare(ctx, inputs, tensor_like(ctx, inputs, -tail_bound), [] (auto a, auto b) { return a >= b; });
+    auto inputs_less_than_max = tensor_compare(ctx, inputs, tensor_like(ctx, inputs, tail_bound) , [] (auto a, auto b) { return a <= b; });
+
+    auto inside_interval_mask = ggml_mul(ctx, inputs_less_than_max, inputs_more_than_min);
+    auto outside_interval_mask = tensor_not(ctx, inside_interval_mask);
+
+    auto outputs = zeros_like(ctx, inputs);
+    float constant = std::log(std::exp(1 - min_derivative) - 1);
+
+    unnormalized_derivatives = pad_3d(ctx, unnormalized_derivatives, {1, 1, 0, 0, 0, 0});
+    unnormalized_derivatives = index_put_last_dim(ctx, unnormalized_derivatives, 0, constant);
+    unnormalized_derivatives = index_put_last_dim(ctx, unnormalized_derivatives, -1, constant);
+
+    outputs = ggml_masked_set(ctx, outputs, outside_interval_mask, ggml_masked_get(ctx, inputs, inside_interval_mask));
+
+    auto result = rational_quadratic_spline(
+            ctx,
+            ggml_masked_get(ctx, inputs, inside_interval_mask),
+            ggml_masked_get(ctx, unnormalized_widths, inside_interval_mask),
+            ggml_masked_get(ctx, unnormalized_heights, inside_interval_mask),
+            ggml_masked_get(ctx, unnormalized_derivatives, inside_interval_mask),
+            reverse,
+            tail_bound,
+            min_bin_width,
+            min_bin_height,
+            min_derivative
+    );
+
+    ggml_masked_set(ctx, outputs, inside_interval_mask, result);
+    return outputs;
 }
 
 struct ggml_tensor* vits_model::conv_flow_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse) {
@@ -717,7 +726,7 @@ struct ggml_tensor* vits_model::conv_flow_graph(struct ggml_context* ctx, struct
     hidden_states = ggml_permute(ctx, hidden_states, 1, 2, 0, 3);
     SHAPE(hidden_states);
 
-    auto scale = ggml_new_f32(ctx, 1.0 / sqrt(filter_channels);
+    auto scale = ggml_new_f32(ctx, 1.0 / sqrt(filter_channels));
     auto unnormalized_widths = ggml_scale(ctx, slice_3d(ctx, hidden_states, 0, num_bins, 0, -1, 0, -1), scale);
     auto unnormalized_heights = ggml_scale(ctx, slice_3d(ctx, hidden_states, num_bins, num_bins * 2, 0, -1, 0, -1), scale);
     auto unnormalized_derivatives = slice_3d(ctx, hidden_states, num_bins * 2, -1, 0, -1, 0, -1);
@@ -725,14 +734,14 @@ struct ggml_tensor* vits_model::conv_flow_graph(struct ggml_context* ctx, struct
     SHAPE(unnormalized_heights);
     SHAPE(unnormalized_derivatives);
 
-    auto [final_second_half, log_abs_det] = unconstrained_rational_quadratic_spline(
+    auto final_second_half = unconstrained_rational_quadratic_spline(
             ctx,
             second_half,
             unnormalized_widths,
             unnormalized_heights,
             unnormalized_derivatives,
             reverse,
-            tail_bound,
+            tail_bound
     );
 
     auto outputs = concat_3d(ctx, first_half, final_second_half, 1);
@@ -760,7 +769,7 @@ struct ggml_tensor* vits_model::stochastic_duration_predictor_graph(struct ggml_
 
     {
         auto _0 = model->use("conv_dds");
-        inputs = this->dilated_depth_separable_conv_graph(ctx, inputs);
+        inputs = this->dilated_depth_separable_conv_graph(ctx, inputs, global_conditioning);
     }
     inputs = conv1d_with_bias(ctx, inputs, this->model->get("conv_proj.weight"), this->model->get("conv_proj.bias"));
     if (!reverse) {
@@ -815,7 +824,7 @@ struct ggml_cgraph* vits_model::build_graph(struct ggml_tensor * input_ids) {
     auto output_length = tensor_max(ctx, predicted_lengths);
     auto cum_duration = cumsum(ctx, duration);
     auto indices = arange(ctx, output_length);
-    auto valid_indices = compare_less_than(ctx, indices, cum_duration);
+    auto valid_indices = tensor_compare(ctx, indices, cum_duration, [](float a, float b) { return a < b; });
     SHAPE(valid_indices);
     auto minus = slice_3d(ctx, pad_3d(ctx, valid_indices, {0, 0, 1, 0, 0, 0}), 0, -1, 0, valid_indices->ne[1]-1, 0, -1);
     auto padded_indices = ggml_sub(ctx, valid_indices, minus);
