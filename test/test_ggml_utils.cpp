@@ -38,9 +38,8 @@ struct ggml_tensor* execute_tensor(
         struct ggml_tensor* tensor
 ) {
     struct ggml_cgraph graph = {};
-    auto result_tensor = tensor;
 
-    ggml_build_forward_expand(&graph, result_tensor);
+    ggml_build_forward_expand(&graph, tensor);
     int threads = std::min((int)std::thread::hardware_concurrency(), 2);
     auto plan = ggml_graph_plan(&graph, threads);
     if (plan.work_size > 0) {
@@ -49,7 +48,7 @@ struct ggml_tensor* execute_tensor(
 
     ggml_graph_compute(&graph, &plan);
 
-    return result_tensor;
+    return tensor;
 }
 
 void assert_tensor_matches_expected(
@@ -58,18 +57,26 @@ void assert_tensor_matches_expected(
         const std::vector<int32_t>& expected_shape,
         const std::string& op_name
 ) {
-    ASSERT(expected.size() == expected_shape[0] * expected_shape[1] * expected_shape[2], "Expected shape should match expected data");
+    auto total_elements = ggml_nelements(tensor);
+    ASSERT(expected.size() == total_elements, ("Expected shape should match expected data " + std::to_string(expected.size()) + " vs " + std::to_string(total_elements)).c_str());
     ASSERT(tensor->n_dims == 3, "Result should be 3D");
     for (int i = 0; i < 3; ++i) {
         ASSERT(tensor->ne[i] == expected_shape[i], (op_name + " should have the correct shape").c_str());
     }
 
-    int64_t total_elements = tensor->ne[0] * tensor->ne[1] * tensor->ne[2];
     auto data = (float*) ggml_get_data(tensor);
     bool equal = true;
+    printf("Expected: [");
     for (int i = 0; i < total_elements; ++i) {
+        printf("%d ", expected[i]);
         equal &= data[i] == expected[i];
     }
+    printf("]\n");
+    printf("Data: [");
+    for (int i = 0; i < total_elements; ++i) {
+        printf("%f ", data[i]);
+    }
+    printf("]\n");
 
     ASSERT(equal, (op_name + " should be correct").c_str());
 }
@@ -89,6 +96,22 @@ void assert_padding_is_correct(
     assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Padding");
 
     std::cout << "Padding is correct\n";
+}
+
+void assert_slice_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* input_ids_tensor,
+        const std::vector<int>& slices,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing Slice" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, slice_3d(ctx, input_ids_tensor, slices[0], slices[1], slices[2], slices[3], slices[4], slices[5]));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Slice");
+
+    std::cout << "Slice is correct\n";
 }
 
 void assert_flip_is_correct(
@@ -114,8 +137,10 @@ void assert_split_is_correct(
         int left,
         int right,
         int dim,
-        const std::vector<int32_t>& expected,
-        const std::vector<int32_t>& expected_shape
+        const std::vector<int32_t>& expected_left,
+        const std::vector<int32_t>& expected_shape_left,
+        const std::vector<int32_t>& expected_right,
+        const std::vector<int32_t>& expected_shape_right
 ) {
     std::cout << "Testing Split" << std::endl;
 
@@ -123,12 +148,34 @@ void assert_split_is_correct(
     struct ggml_tensor* left_result_tensor = execute_tensor(ctx, left_tensor);
     struct ggml_tensor* right_result_tensor = execute_tensor(ctx, right_tensor);
 
-    assert_tensor_matches_expected(left_result_tensor, expected, expected_shape, "Split");
-    assert_tensor_matches_expected(right_result_tensor, expected, expected_shape, "Split");
+    assert_tensor_matches_expected(left_result_tensor, expected_left, expected_shape_left, "Split Left");
+    assert_tensor_matches_expected(right_result_tensor, expected_right, expected_shape_right, "Split Right");
 
     std::cout << "Split is correct\n";
 }
 
+void assert_concat_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* tensor_a,
+        struct ggml_tensor* tensor_b,
+        int dim,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing Concat" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, concat_3d(ctx, tensor_a, tensor_b, dim));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Concat");
+
+    std::cout << "Concat is correct\n";
+}
+
+struct ggml_tensor * create_tensor_with_data_and_shape(struct ggml_context * ctx, const std::vector<float>& data, int h, int w, int d) {
+    auto tensor = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, h, w, d);
+    memcpy(tensor->data, data.data(), ggml_element_size(tensor) * data.size());
+    return tensor;
+}
 
 int main(int argc, char ** argv) {
     struct ggml_init_params params = {
@@ -152,13 +199,34 @@ int main(int argc, char ** argv) {
     assert_padding_is_correct(ctx, input_ids_tensor, {1, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6}, {3, 2, 2});
     assert_padding_is_correct(ctx, input_ids_tensor, {0, 1, 0, 0, 0, 0}, {1, 2, 3, 4, 5, 6, 0, 0, 0, 0, 0, 0}, {3, 2, 2});
 
-    // Split tests
-    assert_split_is_correct()
-    assert_split_is_correct()
-    assert_split_is_correct()
+    // Slice
 
-    // Flip tests
-    assert_flip_is_correct()
+    assert_slice_is_correct(ctx, input_ids_tensor, {0, -1, 0, -1, 0, -1}, {1, 2, 3, 4, 5, 6}, {3, 2, 1});
+
+    assert_slice_is_correct(ctx, input_ids_tensor, {0, -1, 0, -1, 0, 1}, {1, 2, 3, 4, 5, 6}, {3, 2, 1});
+
+    assert_slice_is_correct(ctx, input_ids_tensor, {0, -1, 0, 1, 0, -1}, {1, 2, 3}, {3, 1, 1});
+    assert_slice_is_correct(ctx, input_ids_tensor, {0, -1, 1, -1, 0, -1}, {4, 5, 6}, {3, 1, 1});
+
+    assert_slice_is_correct(ctx, input_ids_tensor, {0, 2, 0, -1, 0, -1}, {1, 2, 4, 5}, {2, 2, 1});
+    assert_slice_is_correct(ctx, input_ids_tensor, {2, -1, 0, -1, 0, -1}, {3, 6}, {1, 2, 1});
+
+
+
+    // Split tests
+
+    assert_split_is_correct(ctx, input_ids_tensor, 2, 1, 0,
+                            {1, 2, 3, 4}, {2, 2, 1},
+                            {5, 6}, {1, 2, 1});
+
+    // Flip
+    print_tensor(input_ids_tensor, "Input");
+    assert_flip_is_correct(ctx, input_ids_tensor, 1, {3, 2, 1, 6, 5, 4}, {3, 2, 1});
+
+    auto tensor_a = create_tensor_with_data_and_shape(ctx, {1, 2, 3}, 3, 1, 1);
+    auto tensor_b = create_tensor_with_data_and_shape(ctx, {1, 7, 8}, 3, 1, 1);
+
+    assert_concat_is_correct(ctx, tensor_b, tensor_a, 1, {1, 7, 8, 1, 2, 3}, {3, 2, 1});
 
     return 0;
 }

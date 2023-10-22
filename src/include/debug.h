@@ -47,19 +47,16 @@ do { \
             if (i != tensor->n_dims - 1) printf(", "); \
         } \
         printf(")\n");                                   \
-        ASSERT(tensor->n_dims == expected_shape.size());                                                 \
+        ASSERT(tensor->n_dims == expected_shape.size(), "Shape len mismatch"); \
         for (int i = 0; i < tensor->n_dims; ++i) { \
-            if (tensor->ne[i] != expected_shape[i]) { \
-                printf("Shape should match\n"); /* or some kind of assertion failure mechanism */ \
-                break; \
-            } \
+            ASSERT(tensor->ne[i] == expected_shape[i], "Shape mismatch"); \
         } \
 } while(0);
 
 
 #define PRINT_TENSOR2(tensor)                                 \
     do {                                                           \
-        printf("%s (%d, %d, %d, %d): [\n", #tensor, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);                             \
+        printf("%s (%zu, %zu, %zu, %zu): [\n", #tensor, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);                             \
         auto ne = tensor->ne;                                      \
         auto nb0 = tensor->nb[0];                                  \
         auto nb1 = tensor->nb[1];                                  \
