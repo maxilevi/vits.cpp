@@ -174,7 +174,7 @@ ggml_tensor* shape_attn(struct ggml_context* ctx, struct ggml_tensor* tensor, in
         return inputs * padding_mask
  * */
 
-struct ggml_tensor* vits_model::text_encoder_graph(struct ggml_tensor* input_ids) {
+struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_encoder_graph(struct ggml_tensor* input_ids) {
     auto config = this->model->config;
     auto act_func = this->load_param("hidden_act");
     auto hidden_size = this->load_number("hidden_size");
@@ -350,18 +350,19 @@ struct ggml_tensor* vits_model::text_encoder_graph(struct ggml_tensor* input_ids
     printf("Finished text encoder\n");
     // In the future add support for returning this
     //printf("Final proj for text encoder\n");
-    //stats = self.project(last_hidden_state.transpose(1, 2)).transpose(1, 2) * padding_mask
-    //prior_means, prior_log_variances = torch.split(stats, self.config.flow_size, dim=2)
-    return cur;
+    auto flow_size = this->load_number("flow_size");
+    cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
+    auto stats = conv1d_with_bias(ctx, cur, model->get("project.weight"), model->get("project.bias"));
+    cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
+    auto [prior_means, prior_log_variances] = split_3d(ctx, stats, flow_size, flow_size, 2);
+    return std::make_tuple(cur, prior_means, prior_log_variances);
 }
 
 struct ggml_tensor* add_tanh_sigmoid_multiply(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b, int num_channels) {
     auto in_act = ggml_add(ctx, a, b);
     auto in_act_slice = slice_3d(ctx, in_act, 0, -1, 0, num_channels, 0, -1);
     auto tanh = ggml_tanh(ctx, in_act_slice);
-    //TODO IMPLEMENT tanh
-    ASSERT(false, "sigmoid not implemented");
-    auto sigmoid = tanh;//ggml_sigmoid(ctx, in_act_slice);
+    auto sigmoid = ggml_sigmoid(ctx, in_act_slice);
     auto out = ggml_mul(ctx, tanh, sigmoid);
     return out;
 }
@@ -453,9 +454,8 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
     for (int i = 0; i < dilation.size(); i++) {
         auto residual = hidden_states;
         auto cur = hidden_states;
-        // FIXME: leaky relu
         auto _0 = model->use("convs1." + std::to_string(i));
-        cur = ggml_relu(ctx, cur);
+        cur = leaky_relu(ctx, cur, leaky_relu_slope);
         cur = conv1d_with_bias(ctx, cur,
                                this->model->get("weight"),
                                this->model->get("bias"),
@@ -464,8 +464,7 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
                                dilation[i]
         );
         _0 = model->use("convs2." + std::to_string(i));
-        // FIXME: leaky relu
-        cur = ggml_relu(ctx, cur);
+        cur = leaky_relu(ctx, cur, leaky_relu_slope);
         cur = conv1d_with_bias(ctx, cur,
                                this->model->get("weight"),
                                this->model->get("bias"),
@@ -480,7 +479,9 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
 
 struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct ggml_tensor * spectogram, struct ggml_tensor* global_conditioning) {
     auto _ = model->use("decoder");
-    auto num_upsamples = this->load_number("num_upsamples");
+    auto upsample_rates = this->load_vector<int>("upsample_rates");
+    auto upsample_kernel_sizes = this->load_vector<int>("upsample_kernel_sizes");
+    auto num_upsamples = upsample_rates.size();
     auto kernel_sizes = this->load_vector<int>("resblock_kernel_sizes");
     auto num_kernels = this->load_number("resblock_kernel_sizes");
     auto dilations = this->load_vector<std::vector<int>>("resblock_dilation_sizes");
@@ -503,9 +504,8 @@ struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct g
 
     for(int i = 0; i < num_upsamples; ++i)
     {
-        // FIXME should be leaky relu
-        hidden_states = ggml_relu(ctx, hidden_states);
-        hidden_states = ggml_conv_transpose_1d(ctx, hidden_states, this->model->get("upsample_conv.weight"), upsample_rate, (int) ((kernel_size - upsample_rate) / 2));
+        hidden_states = leaky_relu(ctx, hidden_states, leaky_relu_slope);
+        hidden_states = ggml_conv_transpose_1d(ctx, hidden_states, this->model->get("upsample_conv.weight"), upsample_rates[i], (int) ((upsample_kernel_sizes[i] - upsample_rates[i]) / 2), 1);
         hidden_states = ggml_add(ctx, hidden_states, this->model->get("upsample_conv.bias"));
 
         auto idx = i * num_kernels;
@@ -516,14 +516,14 @@ struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct g
         for(auto j = 1; j < num_kernels; ++j) {
             idx = i * num_kernels + j;
             _0 = model->use("resblock_conv." + std::to_string(idx));
-            [kernel_size, dilation, slope] = all_params[idx];
+            auto [kernel_size, dilation, slope] = all_params[idx];
             auto block_res = this->hifigan_residual_block_graph(ctx, hidden_states, kernel_size, dilation, slope);
             res_state = ggml_add(ctx, res_state, block_res);
         }
         hidden_states = ggml_scale(ctx, res_state, ggml_new_f32(ctx, (float) (1.0 / num_kernels)));
     }
 
-    hidden_states = ggml_relu(ctx, hidden_states);
+    hidden_states = leaky_relu(ctx, hidden_states, leaky_relu_slope);
     hidden_states = conv1d(ctx, hidden_states, this->model->get("conv_post.weight"), this->model->get("conv_post.bias"), 1, 3);
     auto waveform = ggml_tanh(ctx, hidden_states);
     return waveform;
@@ -537,12 +537,14 @@ struct ggml_tensor* vits_model::stochastic_duration_predictor_graph(struct ggml_
 struct ggml_cgraph* vits_model::build_graph(struct ggml_tensor * input_ids) {
     auto config = this->model->config;
     auto noise_scale_duration = this->load_float("noise_scale_duration");
+    auto noise_scale = this->load_float("noise_scale");
     struct ggml_tensor* speaker_embeddings = nullptr;
 
-    auto text_encoder_output = this->text_encoder_graph(input_ids);
-    //prior_means = text_encoder_output[1] if not return_dict else text_encoder_output.prior_means
-    //prior_log_variances = text_encoder_output[2] if not return_dict else text_encoder_output.prior_log_variances
+    auto [text_encoder_output, prior_means, prior_log_variances] = this->text_encoder_graph(input_ids);
     ASSERT_SHAPE(text_encoder_output, 192, input_ids->ne[1], 1, 1);
+    ASSERT_SHAPE(prior_means, 192, input_ids->ne[1], 1, 1);
+    ASSERT_SHAPE(prior_log_variances, 192, input_ids->ne[1], 1, 1);
+    //ASSERT_STARTS_WITH(text_encoder_output, {.});
 
     auto hidden_states = text_encoder_output;
     hidden_states = ggml_permute(ctx, hidden_states, 0, 2, 1, 3);
@@ -553,20 +555,32 @@ struct ggml_cgraph* vits_model::build_graph(struct ggml_tensor * input_ids) {
     auto length_scale = 1.0 / speaking_rate;
     auto duration = ;*/
 
-    auto prior_means = torch.matmul(attn.squeeze(1), prior_means).transpose(1, 2)
-    auto prior_log_variances = torch.matmul(attn.squeeze(1), prior_log_variances).transpose(1, 2)
 
-    auto prior_latents = prior_means + torch.randn_like(prior_means) * torch.exp(prior_log_variances) * self.noise_scale
-    auto latents = this->flow_graph(prior_latents, speaker_embeddings, reverse=True)
+    //cum_duration = torch.cumsum(duration, -1).view(batch_size * input_length, 1)
+    //indices = torch.arange(output_length, dtype=duration.dtype, device=duration.device)
+    //valid_indices = indices.unsqueeze(0) < cum_duration
+    //valid_indices = valid_indices.to(attn_mask.dtype).view(batch_size, input_length, output_length)
+    //padded_indices = valid_indices - nn.functional.pad(valid_indices, [0, 0, 1, 0, 0, 0])[:, :-1]
+    //attn = padded_indices.unsqueeze(1).transpose(2, 3) * attn_mask
+    struct ggml_tensor* attn = ones_like(ctx, input_ids);
+    // Fill with ones
 
-    auto waveform = this->hifigan_graph(ctx, latents, speaker_embeddings)
-    waveform = waveform.squeeze(1)
-    sequence_lengths = predicted_lengths * np.prod(self.config.upsample_rates)
 
-    auto gf = ggml_build_forward_ctx(ctx, this->last_hidden_state);
-    ASSERT_STARTS_WITH(text_encoder_output, {.});
-    ASSERT_STARTS_WITH(flow_output, {.});
-    ASSERT_STARTS_WITH(duration_output, {.});
+    prior_means = ggml_mul_mat(ctx, attn, prior_means);
+    prior_means = ggml_permute(ctx, prior_means, 0, 2, 1, 3);
+    prior_log_variances = ggml_mul_mat(ctx, attn, prior_log_variances);
+    prior_log_variances = ggml_permute(ctx, prior_log_variances, 0, 2, 1, 3);
+
+    auto noise = randn_like(ctx, prior_means);
+    noise = ggml_mul(ctx, noise, ggml_exp(ctx, prior_log_variances));
+    noise = ggml_scale(ctx, noise, ggml_new_f32(ctx, noise_scale));
+
+    auto prior_latents = ggml_add(ctx, prior_means, noise);
+    auto latents = this->flow_graph(ctx, prior_latents, speaker_embeddings, true);
+
+    this->waveform = this->hifigan_graph(ctx, latents, speaker_embeddings);
+
+    auto gf = ggml_build_forward_ctx(ctx, this->waveform);
 
     printf("Finished building graph\n");
 

@@ -7,6 +7,7 @@
 #include <string>
 #include <stdint.h>
 #include <vector>
+#include <sstream>
 #include "vits_model_data.h"
 
 typedef struct ggml_tensor * tensor_t;
@@ -17,6 +18,7 @@ private:
     std::unique_ptr<vits_model_data> model;
     struct ggml_context * ctx;
     struct ggml_tensor * last_hidden_state;
+    struct ggml_tensor * waveform;
     int load_number(std::string key);
     float load_float(std::string key);
     std::string load_param(std::string key);
@@ -44,7 +46,7 @@ public:
     vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model, int speaking_rate);
     ~vits_model();
     struct ggml_cgraph* build_graph(struct ggml_tensor * input_ids);
-    struct ggml_tensor* text_encoder_graph(struct ggml_tensor* input_ids);
+    struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> text_encoder_graph(struct ggml_tensor* input_ids);
     struct ggml_tensor* wavenet_graph(struct ggml_tensor* input, struct ggml_tensor* speaker_embedding);
     struct ggml_tensor* flow_graph(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse);
     struct ggml_tensor* hifigan_graph(struct ggml_context* ctx, struct ggml_tensor * input_ids, struct ggml_tensor* global_conditioning);
