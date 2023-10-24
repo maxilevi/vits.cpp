@@ -60,14 +60,35 @@ struct ggml_tensor* linear_with_bias(struct ggml_context* ctx, struct ggml_tenso
     return cur;
 }
 
-struct ggml_tensor* conv1d(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, struct ggml_tensor* proj_bias, int stride = 1, int padding = 0, int dilation= 1) {
+struct ggml_tensor* conv1d(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, int stride = 1, int padding = 0, int dilation= 1, int groups = 1) {
+    ASSERT(input->n_dims == 3, "Conv only supported on 3d tensors");
+    int group_stride = (int) (input->ne[1] / groups);
     auto proj_weights_fp16 = cast_tensor_fp32_to_fp16(ctx, proj_weights);
-    auto cur = ggml_conv_1d(ctx, proj_weights_fp16, input, stride, padding, dilation);
-    return cur;
+    struct ggml_tensor* final = nullptr;
+    if (groups > 1) {
+        printf("group_stride = %d\n", group_stride);
+        SHAPE(input);
+        SHAPE(proj_weights);
+        for(int i = 0; i < groups; i++) {
+            auto input_i = slice_3d(ctx, input, 0, -1, i * group_stride, group_stride * (i + 1), 0, -1);
+            auto weights_i = slice_3d(ctx, proj_weights_fp16, 0, -1, 0, -1, i * group_stride, (i + 1) * group_stride);
+
+            auto result = ggml_conv_1d(ctx, weights_i, input_i, stride, padding, dilation);
+            result = ggml_reshape_3d(ctx, result, result->ne[0], result->ne[1], result->ne[2]);
+            if (final != nullptr) {
+                final = concat_3d(ctx, final, result, 1);
+            } else {
+                final = result;
+            }
+        }
+    } else {
+        final = ggml_conv_1d(ctx, proj_weights_fp16, input, stride, padding, dilation);
+    }
+    return final;
 }
 
-struct ggml_tensor* conv1d_with_bias(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, struct ggml_tensor* proj_bias, int stride = 1, int padding = 0, int dilation= 1) {
-    auto cur = conv1d(ctx, input, proj_weights, proj_bias, stride, padding, dilation);
+struct ggml_tensor* conv1d_with_bias(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, struct ggml_tensor* proj_bias, int stride = 1, int padding = 0, int dilation= 1, int groups = 1) {
+    auto cur = conv1d(ctx, input, proj_weights, stride, padding, dilation, groups);
     cur = ggml_permute(ctx, cur, 1, 0, 2, 3);
     cur = ggml_cont(ctx, cur);
     cur = ggml_add(ctx, cur, proj_bias);
@@ -482,42 +503,46 @@ struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct g
     }
 
     hidden_states = leaky_relu(ctx, hidden_states, leaky_relu_slope);
-    hidden_states = conv1d(ctx, hidden_states, this->model->get("conv_post.weight"), this->model->get("conv_post.bias"), 1, 3);
+    hidden_states = conv1d_with_bias(ctx, hidden_states, this->model->get("conv_post.weight"), this->model->get("conv_post.bias"), 1, 3);
     auto waveform = ggml_tanh(ctx, hidden_states);
     return waveform;
 }
 
 struct ggml_tensor* vits_model::dilated_depth_separable_conv_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning) {
+    printf("Dilated depth separable conv\n");
     auto kernel_size = this->load_number("duration_predictor_kernel_size");
     auto num_layers = this->load_number("depth_separable_num_layers");
 
     if (global_conditioning != nullptr)
         inputs = ggml_add(ctx, inputs, global_conditioning);
 
+    inputs = ggml_reshape_3d(ctx, inputs, inputs->ne[0], inputs->ne[1], inputs->ne[2]);
     for(int i = 0; i < num_layers; ++i) {
         auto conv_dilated_i_weight = this->model->get("convs_dilated." + std::to_string(i) + ".weight");
         auto conv_dilated_i_bias = this->model->get("convs_dilated." + std::to_string(i) + ".bias");
-        auto hidden_states = conv1d_with_bias(ctx, inputs, conv_dilated_i_weight, conv_dilated_i_bias);
+        auto dilation = pow(kernel_size, i);
+        auto padding = (int) ((kernel_size * dilation - dilation) / 2);
 
-        auto norm1_i_weight = this->model->get("norm1." + std::to_string(i) + ".weight");
-        auto norm1_i_bias = this->model->get("norm1." + std::to_string(i) + ".bias");
-        hidden_states = ggml_permute(ctx, hidden_states, 2, 0, 1, 3);
+        auto hidden_states = conv1d_with_bias(ctx, inputs, conv_dilated_i_weight, conv_dilated_i_bias, 1, padding, dilation, conv_dilated_i_weight->ne[2]);
+
+
+        auto norm1_i_weight = this->model->get("norms_1." + std::to_string(i) + ".weight");
+        auto norm1_i_bias = this->model->get("norms_1." + std::to_string(i) + ".bias");
+        hidden_states = ggml_permute(ctx, hidden_states, 1, 0, 2, 3);
         hidden_states = layer_norm(ctx, hidden_states, norm1_i_weight, norm1_i_bias);
-        hidden_states = ggml_permute(ctx, hidden_states, 2, 0, 1, 3);
+        hidden_states = ggml_permute(ctx, hidden_states, 1, 0, 2, 3);
 
         hidden_states = ggml_gelu(ctx, hidden_states);
 
-        auto dilation = pow(kernel_size, i);
-        auto padding = (int) ((kernel_size * dilation - dilation) / 2);
         auto conv_pointwise_i_weight = this->model->get("convs_pointwise." + std::to_string(i) + ".weight");
         auto conv_pointwise_i_bias = this->model->get("convs_pointwise." + std::to_string(i) + ".bias");
-        hidden_states = conv1d_with_bias(ctx, hidden_states, conv_pointwise_i_weight, conv_pointwise_i_bias, 1, padding, dilation);
+        hidden_states = conv1d_with_bias(ctx, hidden_states, conv_pointwise_i_weight, conv_pointwise_i_bias);
 
-        auto norm2_i_weight = this->model->get("norm2." + std::to_string(i) + ".weight");
-        auto norm2_i_bias = this->model->get("norm2." + std::to_string(i) + ".bias");
-        hidden_states = ggml_permute(ctx, hidden_states, 2, 0, 1, 3);
+        auto norm2_i_weight = this->model->get("norms_2." + std::to_string(i) + ".weight");
+        auto norm2_i_bias = this->model->get("norms_2." + std::to_string(i) + ".bias");
+        hidden_states = ggml_permute(ctx, hidden_states, 1, 0, 2, 3);
         hidden_states = layer_norm(ctx, hidden_states, norm2_i_weight, norm2_i_bias);
-        hidden_states = ggml_permute(ctx, hidden_states, 2, 0, 1, 3);
+        hidden_states = ggml_permute(ctx, hidden_states, 1, 0, 2, 3);
 
         hidden_states = ggml_gelu(ctx, hidden_states);
         inputs = ggml_add(ctx, inputs, hidden_states);
@@ -665,6 +690,7 @@ struct ggml_tensor* unconstrained_rational_quadratic_spline(
 
 struct ggml_tensor* vits_model::conv_flow_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse) {
     ASSERT(reverse, "Non reverse not supported");
+    printf("Building conv flow\n");
     auto filter_channels = this->load_number("hidden_size");
     auto half_channels = (int) (this->load_number("depth_separable_channels") / 2);
     auto num_bins = this->load_number("duration_predictor_flow_bins");
@@ -672,11 +698,14 @@ struct ggml_tensor* vits_model::conv_flow_graph(struct ggml_context* ctx, struct
     auto [first_half, second_half] = split_3d(ctx, inputs, half_channels, half_channels, 1);
 
     auto hidden_states = conv1d_with_bias(ctx, first_half, this->model->get("conv_pre.weight"), this->model->get("conv_pre.bias"));
-    hidden_states = this->dilated_depth_separable_conv_graph(ctx, hidden_states, global_conditioning);
-    hidden_states = conv1d_with_bias(ctx, hidden_states, this->model->get("conv_post.weight"), this->model->get("conv_post.bias"));
+    {
+        auto _0 = model->use("conv_dds");
+        hidden_states = this->dilated_depth_separable_conv_graph(ctx, hidden_states, global_conditioning);
+    }
+    hidden_states = conv1d_with_bias(ctx, hidden_states, this->model->get("conv_proj.weight"), this->model->get("conv_proj.bias"));
 
     hidden_states = ggml_reshape_3d(ctx, hidden_states, first_half->ne[0], hidden_states->ne[1], first_half->ne[2]);
-    hidden_states = ggml_permute(ctx, hidden_states, 1, 2, 0, 3);
+    //hidden_states = ggml_permute(ctx, hidden_states, 1, 2, 0, 3);
     SHAPE(hidden_states);
 
     auto scale = ggml_new_f32(ctx, 1.0 / sqrt(filter_channels));
@@ -724,13 +753,14 @@ struct ggml_tensor* vits_model::stochastic_duration_predictor_graph(struct ggml_
         auto _0 = model->use("conv_dds");
         inputs = this->dilated_depth_separable_conv_graph(ctx, inputs, global_conditioning);
     }
+
     inputs = conv1d_with_bias(ctx, inputs, this->model->get("conv_proj.weight"), this->model->get("conv_proj.bias"));
     if (!reverse) {
         ASSERT(reverse, "Non reverse not supported");
     } else {
         auto latents = randn(ctx, {inputs->ne[0], 2, inputs->ne[2]});
         latents = ggml_scale(ctx, latents, ggml_new_f32(ctx, noise_scale_duration));
-        for(int i = duration_predictor_num_flows-1; i > -1; i--) {
+        for(int i = duration_predictor_num_flows-1; i > -1; --i) {
             if (i == 1) continue;
 
             latents = flip_3d(ctx, latents, 1);
