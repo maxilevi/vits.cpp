@@ -49,9 +49,35 @@ def serialize_model_to_binary(config, state_dict, file_name):
             f.write(struct.pack('<I', len(tensor_bytes)))
             f.write(tensor_bytes)
 
+def merge_weight_normalization(state_dict):
+    v_keys = []
+    g_keys = []
+
+    for key in state_dict.keys():
+        if "parametrizations.weight.original" in key:
+            if key.endswith("0"):
+                g_keys.append(key)
+            if key.endswith("1"):
+                v_keys.append(key)
+
+    # Compute normalized weights and update state_dict
+    for v_key, g_key in zip(v_keys, g_keys):
+        print(v_key, g_key)
+        w = state_dict[g_key] * (state_dict[v_key] / torch.norm(state_dict[v_key]))
+
+        # Replace the "original" weight key in state_dict with normalized weights
+        original_key = g_key.replace(".parametrizations.weight.original0", ".weight")
+        state_dict[original_key] = w
+        print(original_key, w.shape)
+        # Optionally, delete the g and v keys from state_dict if you won't need them anymore
+        del state_dict[g_key]
+        del state_dict[v_key]
+
+    return state_dict
+
 if __name__ == '__main__':
     model_name = "facebook/mms-tts-spa"
     model = VitsModel.from_pretrained(model_name)
     print(model.config)
-    serialize_model_to_binary(model.config, model.state_dict(), f'./scripts/vits-spanish.ggml')
+    serialize_model_to_binary(model.config, merge_weight_normalization(model.state_dict()), f'./scripts/vits-spanish.ggml')
     print("Done!")
