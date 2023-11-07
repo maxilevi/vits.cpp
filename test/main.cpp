@@ -1,13 +1,69 @@
 #include <vits.h>
 #include <stdio.h>
 #include <assert.h>
+#include <iostream>
+#include <fstream>
+
+struct WAVHeader {
+    char riff_header[4];         // Contains "RIFF"
+    int wav_size;                // Size of the WAV file
+    char wave_header[4];         // Contains "WAVE"
+    char fmt_header[4];          // Contains "fmt " (with a space after fmt)
+    int fmt_chunk_size;          // Should be 16 for PCM format
+    short audio_format;          // Should be 1 for PCM format
+    short num_channels;
+    int sample_rate;
+    int byte_rate;               // Number of bytes per second. sample_rate * num_channels * Bytes Per Sample
+    short sample_alignment;      // num_channels * Bytes Per Sample
+    short bit_depth;             // Number of bits per sample
+    char data_header[4];         // Contains "data"
+    int data_bytes;              // Number of bytes in data. Number of samples * num_channels * sample byte size
+};
+
+bool write_wav(std::string path, float* samples, size_t size) {
+    WAVHeader wav_header;
+    int sample_rate = 16000;
+    int num_channels = 1;
+    int bit_depth = 32;
+
+    // Open file
+    std::ofstream file(path, std::ios::binary);
+
+    // Write the WAV header
+    memcpy(wav_header.riff_header, "RIFF", 4);
+    memcpy(wav_header.wave_header, "WAVE", 4);
+    memcpy(wav_header.fmt_header, "fmt ", 4);
+    wav_header.fmt_chunk_size = 16;
+    wav_header.audio_format = 3; // For IEEE float data
+    wav_header.num_channels = num_channels;
+    wav_header.sample_rate = sample_rate;
+    wav_header.byte_rate = sample_rate * num_channels * (bit_depth / 8);
+    wav_header.sample_alignment = num_channels * (bit_depth / 8);
+    wav_header.bit_depth = bit_depth;
+    memcpy(wav_header.data_header, "data", 4);
+    wav_header.data_bytes = size * (bit_depth / 8);
+    wav_header.wav_size = 4 + (8 + wav_header.fmt_chunk_size) + (8 + wav_header.data_bytes);
+
+    // Write header to file
+    file.write(reinterpret_cast<const char*>(&wav_header), sizeof(WAVHeader));
+
+    // Write audio samples
+    file.write(reinterpret_cast<const char*>(samples), wav_header.data_bytes);
+
+    // Close file
+    file.close();
+
+    std::cout << "WAV file has been written" << std::endl;
+    return true;
+}
 
 int main(int argc, char ** argv) {
     vits_model * model = vits_model_load_from_file("./scripts/vits-spanish.ggml");
     assert(model != nullptr);
 
     auto result = vits_model_process(model, "phonemes");
-    printf("Generated: %d bytes of audio\n", result.size);
+    printf("Generated: %d samples of audio\n", result.size);
+    printf("Wrote to file: %s\n", write_wav("output.wav", result.data, result.size) ? "true" : "false");
 
     vits_free_result(result);
     vits_free_model(model);
