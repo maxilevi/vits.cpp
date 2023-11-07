@@ -19,7 +19,7 @@ void print_tensor(struct ggml_tensor* tensor, std::string name) {
             for (int64_t k = 0; k < ne[0]; ++k) {
                 // Calculate offset and print element
                 size_t offset = (k * nb0 + j * nb1 + i * nb2) / sizeof(float);
-                std::cout << *(data + offset) << " (" << offset << ") ";
+                std::cout << *(data + offset) << " ";//<< " (" << offset << ") ";
                 //std::cout << *(data + offset) << " ";
             }
             std::cout << "\n";
@@ -59,8 +59,7 @@ void assert_tensor_matches_expected(
 ) {
     auto total_elements = ggml_nelements(tensor);
     ASSERT(expected.size() == total_elements, ("Expected shape should match expected data " + std::to_string(expected.size()) + " vs " + std::to_string(total_elements)).c_str());
-    ASSERT(tensor->n_dims == 3, "Result should be 3D");
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < tensor->n_dims; ++i) {
         ASSERT(tensor->ne[i] == expected_shape[i], (op_name + " should have the correct shape").c_str());
     }
 
@@ -72,9 +71,9 @@ void assert_tensor_matches_expected(
         for (int64_t j = 0; j < tensor->ne[1]; ++j) {
             for (int64_t k = 0; k < tensor->ne[0]; ++k) {
                 size_t offset = (k * tensor->nb[0] + j * tensor->nb[1] + i * tensor->nb[2]) / sizeof(float);
-                std::cout << *(data + offset) << " (" << offset << ") ";
+                std::cout << *(data + offset) << " ";//<< " (" << offset << ") [" << expected[index] << "] ";
                 auto val = *(data + offset);
-                equal &= (val - expected[index++]) < 1e-5;
+                equal &= (val == expected[index++]);
             }
         }
     }
@@ -208,19 +207,135 @@ void assert_max_is_correct(
     std::cout << "Max is correct\n";
 }
 
+void assert_not_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* tensor,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing Not" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_not(ctx, tensor));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Not");
+
+    std::cout << "Not is correct\n";
+}
+
+void assert_compare_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* a,
+        struct ggml_tensor* b,
+        bool(*func)(float, float),
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing Compare" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_compare(ctx, a, b, func));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Compare");
+
+    std::cout << "Compare is correct\n";
+}
+
 void assert_arange_is_correct(
         struct ggml_context* ctx,
-        struct ggml_tensor* range,
+        int range,
         const std::vector<int32_t>& expected,
         const std::vector<int32_t>& expected_shape
 ) {
     std::cout << "Testing arange" << std::endl;
 
-    struct ggml_tensor* result_tensor = execute_tensor(ctx, arange(ctx, range));
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_arange(ctx, range));
 
     assert_tensor_matches_expected(result_tensor, expected, expected_shape, "arange");
 
     std::cout << "arange is correct\n";
+}
+
+void assert_index_put_last_dim_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* tensor,
+        int index,
+        float value,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing index_put_last_dim" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, index_put_last_dim(ctx, tensor, index, value));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "index_put_last_dim");
+
+    std::cout << "index_put_last_dim is correct\n";
+}
+
+void assert_index_add_last_dim_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* tensor,
+        int index,
+        float value,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing index_add_last_dim" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, index_add_last_dim(ctx, tensor, index, value));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "index_add_last_dim");
+
+    std::cout << "index_add_last_dim is correct\n";
+}
+
+void assert_gather_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* tensor,
+        int dim,
+        struct ggml_tensor* index,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing gather" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_gather(ctx, tensor, dim, index));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "gather");
+
+    std::cout << "gather is correct\n";
+}
+
+void assert_masked_get_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* tensor,
+        struct ggml_tensor* mask,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing masked_get" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_masked_get(ctx, tensor, mask));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "masked_get");
+
+    std::cout << "masked_get is correct\n";
+}
+
+void assert_masked_set_is_correct(
+        struct ggml_context* ctx,
+        struct ggml_tensor* tensor,
+        struct ggml_tensor* mask,
+        struct ggml_tensor* value,
+        const std::vector<int32_t>& expected,
+        const std::vector<int32_t>& expected_shape
+) {
+    std::cout << "Testing masked_set" << std::endl;
+
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_masked_set(ctx, tensor, mask, value));
+
+    assert_tensor_matches_expected(result_tensor, expected, expected_shape, "masked_set");
+
+    std::cout << "masked_set is correct\n";
 }
 
 struct ggml_tensor * create_tensor_with_data_and_shape(struct ggml_context * ctx, const std::vector<float>& data, int h, int w, int d) {
@@ -228,6 +343,13 @@ struct ggml_tensor * create_tensor_with_data_and_shape(struct ggml_context * ctx
     memcpy(tensor->data, data.data(), ggml_element_size(tensor) * data.size());
     return tensor;
 }
+
+struct ggml_tensor * create_tensor_1d_with_data_and_shape(struct ggml_context * ctx, const std::vector<float>& data, int l) {
+    auto tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, l);
+    memcpy(tensor->data, data.data(), ggml_element_size(tensor) * data.size());
+    return tensor;
+}
+
 
 int main(int argc, char ** argv) {
     struct ggml_init_params params = {
@@ -268,8 +390,8 @@ int main(int argc, char ** argv) {
     // Split tests
 
     assert_split_is_correct(ctx, input_ids_tensor, 2, 1, 0,
-                            {1, 2, 3, 4}, {2, 2, 1},
-                            {5, 6}, {1, 2, 1});
+                            {1, 2, 4, 5}, {2, 2, 1},
+                            {3, 6}, {1, 2, 1});
     // Flip
     print_tensor(input_ids_tensor, "Input");
     assert_flip_is_correct(ctx, input_ids_tensor, 1, {3, 2, 1, 6, 5, 4}, {3, 2, 1});
@@ -279,13 +401,102 @@ int main(int argc, char ** argv) {
 
     assert_concat_is_correct(ctx, tensor_b, tensor_a, 1, {1, 7, 8, 1, 2, 3}, {3, 2, 1});
 
+    assert_concat_is_correct(ctx, tensor_b, tensor_a, 0, {1, 7, 8, 1, 2, 3}, {6, 1, 1});
+
+    assert_compare_is_correct(ctx, tensor_a, tensor_b, [](float a, float b) { return a < b; }, {0, 1, 1}, {3, 1, 1});
+
+    assert_compare_is_correct(ctx, tensor_a, tensor_b, [](float a, float b) { return a >= b; }, {1, 0, 0}, {3, 1, 1});
+
+    auto a = ggml_cont(ctx, ggml_permute(ctx, ggml_reshape_2d(ctx, tensor_b, tensor_b->ne[0], tensor_b->ne[1]), 1, 0, 2, 3));
+    auto b = ggml_cont(ctx, ggml_permute(ctx, ggml_reshape_2d(ctx, input_ids_tensor, input_ids_tensor->ne[0], input_ids_tensor->ne[1]), 1, 0, 2, 3));
+    print_tensor(execute_tensor(ctx, a), "a");
+    print_tensor(execute_tensor(ctx, b), "b");
+    assert_compare_is_correct(
+            ctx,
+            a,
+            b,
+            [](float a, float b) { return a >= b; },
+            {1, 0, 1, 1, 1, 1},
+            {2, 3}
+    );
+
+
     auto tensor_d = create_tensor_with_data_and_shape(ctx, {1, 2, 3}, 3, 1, 1);
     assert_cumsum_is_correct(ctx, tensor_d, {1, 3, 6}, {3, 1, 1});
 
     auto tensor_c = create_tensor_with_data_and_shape(ctx, {6, 2, 3, 8, 4, 2}, 3, 2, 1);
-    assert_max_is_correct(ctx, tensor_c, {6, 6, 6, 8, 8, 8}, {3, 2, 1});
+    assert_max_is_correct(ctx, tensor_c, {8}, {1});
 
-    //assert_arange_is_correct(ctx, ggml_new_f32(ctx, 6), {0, 1, 2, 3, 4, 5}, {6, 1, 1});
+    assert_not_is_correct(ctx, create_tensor_with_data_and_shape(ctx, {0, 1, 0, 1, 0, 0}, 3, 2, 1), {1, 0, 1, 0, 1, 1}, {3, 2, 1});
+
+    assert_index_put_last_dim_is_correct(
+            ctx,
+            ggml_dup(ctx, input_ids_tensor),
+            0,
+            10,
+            {10, 2, 3, 10, 5, 6},
+            {3, 2, 1}
+    );
+
+    assert_index_put_last_dim_is_correct(
+            ctx,
+            ggml_dup(ctx, input_ids_tensor),
+            2,
+            10,
+            {1, 2, 10, 4, 5, 10},
+            {3, 2, 1}
+    );
+
+    assert_index_put_last_dim_is_correct(
+            ctx,
+            ggml_dup(ctx, input_ids_tensor),
+            1,
+            5,
+            {1, 5, 3, 4, 5, 6},
+            {3, 2, 1}
+    );
+
+
+    assert_index_add_last_dim_is_correct(
+            ctx,
+            input_ids_tensor,
+            1,
+            9,
+            {1, 11, 3, 4, 14, 6},
+            {3, 2, 1}
+    );
+
+    assert_masked_set_is_correct(ctx,
+        input_ids_tensor,
+        create_tensor_with_data_and_shape(ctx, {0, 1, 0, 1, 1, 0}, 3, 2, 1),
+        create_tensor_with_data_and_shape(ctx, {10, 10, 10, 10, 10, 10}, 3, 2, 1),
+        {1, 10, 3, 10, 10, 6},
+        {3, 2, 1}
+    );
+/*
+    assert_masked_get_is_correct(ctx,
+         input_ids_tensor,
+         create_tensor_with_data_and_shape(ctx, {0, 1, 0, 1, 1, 0}, 3, 2, 1),
+         {2, 4, 5},
+         {3}
+    );
+*/
+    assert_gather_is_correct(
+            ctx,
+            input_ids_tensor,
+            0,
+            create_tensor_1d_with_data_and_shape(ctx, {0, 2, 5}, 3),
+            {1, 3, 6},
+            {3}
+    );
+
+    assert_arange_is_correct(
+            ctx,
+            6,
+            {0, 1, 2, 3, 4, 5},
+            {6, 1, 1}
+            );
+
 
     return 0;
 }

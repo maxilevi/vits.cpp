@@ -8,6 +8,9 @@
 #include <iostream>
 #include <fstream>
 
+#define PRINT_MEM(ctx) \
+    printf("Used mem = %f mb, free mem= %f mb, total mem = %f mb\n", ggml_used_mem(ctx) / 1024.0 / 1024.0, (ggml_get_mem_size(ctx) - ggml_used_mem(ctx)) / 1024.0 / 1024.0, ggml_get_mem_size(ctx) / 1024.0 / 1024.0);
+
 #define SHAPE(tensor) \
 do { \
     printf("Shape '%s' (%d):", #tensor, tensor->type); \
@@ -42,7 +45,7 @@ do { \
             if (i != tensor->n_dims - 1) printf(", "); \
         } \
         printf(") == ("); \
-        for (int i = 0; i < tensor->n_dims; ++i) { \
+        for (int i = 0; i < expected_shape.size(); ++i) { \
             printf("%lld", expected_shape[i]); \
             if (i != tensor->n_dims - 1) printf(", "); \
         } \
@@ -54,8 +57,17 @@ do { \
 } while(0);
 
 #define ASSERT_STARTS_WITH(tensor, val0, val1, val2) \
-    do { \
-        printf("TODO"); \
+    do {                                             \
+        printf("Doing assert_starts_with for %s\n", #tensor);                                             \
+        ASSERT(tensor->type == GGML_TYPE_F32, "Tensor should be type f32");  \
+        ASSERT(ggml_nelements(tensor) >= 3, "Tensor should have at least 3 elements"); \
+        auto f0 = ((float*)tensor->data)[0];         \
+        auto f1 = ((float*)tensor->data)[1];\
+        auto f2 = ((float*)tensor->data)[2];\
+        ASSERT(std::abs(f0 - val0) < 0.01, ("val0 mismatch " + std::to_string(f0) + " vs " + std::to_string(val0)).c_str());       \
+        ASSERT(std::abs(f1 - val1) < 0.01, ("val1 mismatch " + std::to_string(f1) + " vs " + std::to_string(val1)).c_str());       \
+        ASSERT(std::abs(f2 - val2) < 0.01, ("val2 mismatch " + std::to_string(f2) + " vs " + std::to_string(val2)).c_str());       \
+        printf("Assert_starts_with for %s has passed\n", #tensor);                                                 \
     } while(0);
 
 
