@@ -130,10 +130,13 @@ std::unique_ptr<prefix_guard> vits_model_data::use(std::string name) {
 }
 
 struct ggml_tensor* vits_model_data::get(std::string name) const {
-    auto full_prefix = join(this->prefixes, ".");
-    auto full_name = full_prefix + "." + name;
+    auto full_name = this->current_prefix() + "." + name;
     if (tensor_map.find(full_name) == tensor_map.end()) {
         throw std::runtime_error("[ERROR] tensor not found: " + full_name);
     }
     return tensor_map.at(full_name);
+}
+
+std::string vits_model_data::current_prefix() const {
+    return join(this->prefixes, ".");
 }

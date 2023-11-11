@@ -31,6 +31,8 @@ struct vits_model_data {
     std::unique_ptr<prefix_guard> use(std::string name);
 
     struct ggml_tensor* get(std::string name) const;
+
+    std::string current_prefix() const;
 };
 
 

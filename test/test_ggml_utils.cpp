@@ -160,7 +160,7 @@ void assert_split_is_correct(
     std::cout << "Split is correct\n";
 }
 
-void assert_concat_is_correct(
+struct ggml_tensor* assert_concat_is_correct(
         struct ggml_context* ctx,
         struct ggml_tensor* tensor_a,
         struct ggml_tensor* tensor_b,
@@ -175,6 +175,7 @@ void assert_concat_is_correct(
     assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Concat");
 
     std::cout << "Concat is correct\n";
+    return result_tensor;
 }
 
 void assert_cumsum_is_correct(
@@ -185,7 +186,7 @@ void assert_cumsum_is_correct(
 ) {
     std::cout << "Testing Cumsum" << std::endl;
 
-    struct ggml_tensor* result_tensor = execute_tensor(ctx, cumsum(ctx, tensor));
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, per_row_cumsum(ctx, tensor));
 
     assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Cumsum");
 
@@ -386,6 +387,12 @@ int main(int argc, char ** argv) {
     assert_slice_is_correct(ctx, input_ids_tensor, {2, -1, 0, -1, 0, -1}, {3, 6}, {1, 2, 1});
 
 
+    auto tensor_abc = create_tensor_with_data_and_shape(ctx, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, 2, 4, 2);
+
+    assert_slice_is_correct(ctx, tensor_abc, {0, -1, 0, 1, 0, -1}, {1, 2, 9, 10}, {2, 1, 2});
+    assert_slice_is_correct(ctx, tensor_abc, {0, -1, 1, 2, 0, -1}, {3, 4, 11, 12}, {2, 1, 2});
+    assert_slice_is_correct(ctx, tensor_abc, {0, -1, 2, 3, 0, -1}, {5, 6, 13, 14}, {2, 1, 2});
+    assert_slice_is_correct(ctx, tensor_abc, {0, -1, 3, 4, 0, -1}, {7, 8, 15, 16}, {2, 1, 2});
 
     // Split tests
 
@@ -402,6 +409,16 @@ int main(int argc, char ** argv) {
     assert_concat_is_correct(ctx, tensor_b, tensor_a, 1, {1, 7, 8, 1, 2, 3}, {3, 2, 1});
 
     assert_concat_is_correct(ctx, tensor_b, tensor_a, 0, {1, 7, 8, 1, 2, 3}, {6, 1, 1});
+
+    auto tensor_start = create_tensor_with_data_and_shape(ctx, {1, 2, 3}, 3, 1, 1);
+    std::vector<int> accum = {1, 2, 3};
+    for(int k = 2; k < 12; k++) {
+        auto tensor_i = create_tensor_with_data_and_shape(ctx, {(float) k, (float)k+1, (float)k+2}, 3, 1, 1);
+        accum.push_back(k);
+        accum.push_back(k+1);
+        accum.push_back(k+2);
+        tensor_start = assert_concat_is_correct(ctx, tensor_start, tensor_i, 1, accum, {3, k, 1});
+    }
 
     assert_compare_is_correct(ctx, tensor_a, tensor_b, [](float a, float b) { return a < b; }, {0, 1, 1}, {3, 1, 1});
 

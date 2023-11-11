@@ -17,7 +17,7 @@ private:
     int speaking_rate;
     std::unique_ptr<vits_model_data> model;
     struct ggml_context * ctx;
-    struct ggml_tensor * last_hidden_state;
+    struct ggml_tensor * debug_tensor;
     struct ggml_tensor * waveform;
     struct ggml_tensor * cum_duration_output;
     struct ggml_tensor * predicted_lengths_output;
@@ -55,6 +55,28 @@ public:
     struct ggml_tensor* conv_flow_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse);
     struct ggml_tensor* stochastic_duration_predictor_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* speaker_embeddings, bool reverse, float noise_scale_duration);
     struct ggml_tensor* hifigan_residual_block_graph(struct ggml_context *ctx, struct ggml_tensor *hidden_states, int kernel_size, std::vector<int> dilation, double leaky_relu_slope);
+    struct ggml_tensor* unconstrained_rational_quadratic_spline(
+            struct ggml_context* ctx,
+            struct ggml_tensor* inputs,
+            struct ggml_tensor* unnormalized_widths,
+            struct ggml_tensor* unnormalized_heights,
+            struct ggml_tensor* unnormalized_derivatives,
+            bool reverse = false,
+            float tail_bound = 5.0,
+            float min_bin_width = 1e-3,
+            float min_bin_height = 1e-3,
+            float min_derivative = 1e-3);
+    struct ggml_tensor* rational_quadratic_spline(
+            struct ggml_context* ctx,
+            struct ggml_tensor* inputs,
+            struct ggml_tensor* unnormalized_widths,
+            struct ggml_tensor* unnormalized_heights,
+            struct ggml_tensor* unnormalized_derivatives,
+            bool reverse = false,
+            float tail_bound = 5.0,
+            float min_bin_width = 1e-3,
+            float min_bin_height = 1e-3,
+            float min_derivative = 1e-3);
     std::vector<float> process(std::string phonemes);
 };
 
