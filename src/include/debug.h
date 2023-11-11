@@ -73,7 +73,7 @@ do { \
 
 #define PRINT_TENSOR2(tensor)                                 \
     do {                                                           \
-        printf("%s (%zu, %zu, %zu, %zu): [\n", #tensor, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);                             \
+        printf("%s [type: %d] (%zu, %zu, %zu, %zu), (%zu, %zu, %zu, %zu): [\n", #tensor, tensor->type, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3], tensor->nb[0], tensor->nb[1], tensor->nb[2], tensor->nb[3]);                             \
         auto ne = tensor->ne;                                      \
         auto nb0 = tensor->nb[0];                                  \
         auto nb1 = tensor->nb[1];                                  \
