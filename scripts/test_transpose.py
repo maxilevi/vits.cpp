@@ -20,6 +20,7 @@ def manual_conv_transpose1d(input, weight, bias=None, stride=1, padding=0):
     # Expand the input tensor with stride spaces
     expanded_input = torch.zeros((batch_size, in_channels, in_length * stride))
     expanded_input[:, :, ::stride] = input
+    print(expanded_input)
 
     # Flip the weights and transpose to match the input channels
     weight = weight.flip(-1).transpose(0, 1)

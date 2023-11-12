@@ -24,7 +24,12 @@ bool write_wav(std::string path, float* samples, size_t size) {
     WAVHeader wav_header;
     int sample_rate = 16000;
     int num_channels = 1;
-    int bit_depth = 32;
+    int bit_depth = 16;
+
+    std::vector<short> pcm_samples(size);
+    for (size_t i = 0; i < size; ++i) {
+        pcm_samples[i] = static_cast<short>(std::max(-1.0f, std::min(1.0f, samples[i])) * 32767);
+    }
 
     // Open file
     std::ofstream file(path, std::ios::binary);
@@ -34,21 +39,21 @@ bool write_wav(std::string path, float* samples, size_t size) {
     memcpy(wav_header.wave_header, "WAVE", 4);
     memcpy(wav_header.fmt_header, "fmt ", 4);
     wav_header.fmt_chunk_size = 16;
-    wav_header.audio_format = 3; // For IEEE float data
+    wav_header.audio_format = 1;
     wav_header.num_channels = num_channels;
     wav_header.sample_rate = sample_rate;
     wav_header.byte_rate = sample_rate * num_channels * (bit_depth / 8);
     wav_header.sample_alignment = num_channels * (bit_depth / 8);
     wav_header.bit_depth = bit_depth;
     memcpy(wav_header.data_header, "data", 4);
-    wav_header.data_bytes = size * (bit_depth / 8);
+    wav_header.data_bytes = pcm_samples.size() * (bit_depth / 8);
     wav_header.wav_size = 4 + (8 + wav_header.fmt_chunk_size) + (8 + wav_header.data_bytes);
 
     // Write header to file
     file.write(reinterpret_cast<const char*>(&wav_header), sizeof(WAVHeader));
 
     // Write audio samples
-    file.write(reinterpret_cast<const char*>(samples), wav_header.data_bytes);
+    file.write(reinterpret_cast<const char*>(pcm_samples.data()), wav_header.data_bytes);
 
     // Close file
     file.close();
@@ -56,13 +61,15 @@ bool write_wav(std::string path, float* samples, size_t size) {
     std::cout << "WAV file has been written" << std::endl;
     return true;
 }
+const char* notting_hill = "Notting Hill (1999) William, a British bookseller, meets and falls in love with Anna, a high-profile American actress. However, their relationship goes through many problems due to their different social statuses.";
+
 
 int main(int argc, char ** argv) {
     vits_model * model = vits_model_load_from_file("./scripts/vits-spanish.ggml");
     assert(model != nullptr);
 
-    auto result = vits_model_process(model, "phonemes");
-    printf("Generated: %d samples of audio\n", result.size);
+    auto result = vits_model_process(model, "Hola esto es una prueba!");
+    printf("Generated: %d samples of audio %f %f %f\n", result.size, result.data[0], result.data[1], result.data[2]);
     printf("Wrote to file: %s\n", write_wav("output.wav", result.data, result.size) ? "true" : "false");
 
     vits_free_result(result);

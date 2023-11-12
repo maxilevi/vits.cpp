@@ -1,9 +1,31 @@
 import torch
 import struct
-from transformers import VitsModel
+from transformers import VitsModel, VitsTokenizer
 
-def serialize_model_to_binary(config, state_dict, file_name):
+def serialize_model_to_binary(config, state_dict, tokenizer, file_name):
     with open(file_name, 'wb') as f:
+        # Write tokenizer
+        assert not tokenizer.phonemize
+        assert not tokenizer.is_uroman
+        # Write tokenizer vocab
+        vocab = tokenizer.get_vocab()
+        f.write(struct.pack('<I', len(vocab)))
+        for key, value in vocab.items():
+            key_bytes = key.encode('utf-8')
+            f.write(struct.pack('<I', len(key_bytes)))
+            f.write(key_bytes)
+            f.write(struct.pack('<I', value))
+        # Write tokenizer options
+        f.write(struct.pack('<I', tokenizer.add_blank))
+        f.write(struct.pack('<I', tokenizer.normalize))
+        # Write pad token and unk token
+        pad_token_bytes = tokenizer.pad_token.encode('utf-8')
+        f.write(struct.pack('<I', len(pad_token_bytes)))
+        f.write(pad_token_bytes)
+        unk_token_bytes = tokenizer.unk_token.encode('utf-8')
+        f.write(struct.pack('<I', len(unk_token_bytes)))
+        f.write(unk_token_bytes)
+
         # Write config
         items = config.to_diff_dict().items()
         f.write(struct.pack('<I', len(items)))
@@ -19,11 +41,12 @@ def serialize_model_to_binary(config, state_dict, file_name):
         tensors = state_dict.items()
         f.write(struct.pack('<I', len(tensors)))
         for key, tensor in tensors:
+            assert not 'original0' in key
             # Write tensor name length and bytes
             tensor_name_bytes = key.encode('utf-8')
             f.write(struct.pack('<I', len(tensor_name_bytes)))
             f.write(tensor_name_bytes)
-            print(len(tensor_name_bytes), tensor_name_bytes)
+            #print(len(tensor_name_bytes), tensor_name_bytes)
 
             # Write tensor type
             type_mapping = {
@@ -49,35 +72,24 @@ def serialize_model_to_binary(config, state_dict, file_name):
             f.write(struct.pack('<I', len(tensor_bytes)))
             f.write(tensor_bytes)
 
-def merge_weight_normalization(state_dict):
-    v_keys = []
-    g_keys = []
+def remove_weight_norm_from_model(module):
+    import torch.nn.utils.parametrize as parametrize
 
-    for key in state_dict.keys():
-        if "parametrizations.weight.original" in key:
-            if key.endswith("0"):
-                g_keys.append(key)
-            if key.endswith("1"):
-                v_keys.append(key)
+    for name, submodule in module.named_children():
+        # Check if weight normalization is applied
+        #print(str(type(submodule)))
+        if str(type(submodule)) == "<class 'torch.nn.utils.parametrize.ParametrizedConv1d'>":
+            parametrize.remove_parametrizations(submodule, 'weight', leave_parametrized=True)
+            #print(f"Removed weight norm from {name}")
 
-    # Compute normalized weights and update state_dict
-    for v_key, g_key in zip(v_keys, g_keys):
-        print(v_key, g_key)
-        w = state_dict[g_key] * (state_dict[v_key] / torch.norm(state_dict[v_key]))
-
-        # Replace the "original" weight key in state_dict with normalized weights
-        original_key = g_key.replace(".parametrizations.weight.original0", ".weight")
-        state_dict[original_key] = w
-        print(original_key, w.shape)
-        # Optionally, delete the g and v keys from state_dict if you won't need them anymore
-        del state_dict[g_key]
-        del state_dict[v_key]
-
-    return state_dict
+        # Recursively apply to children modules
+        remove_weight_norm_from_model(submodule)
+    return module
 
 if __name__ == '__main__':
-    model_name = "facebook/mms-tts-spa"
-    model = VitsModel.from_pretrained(model_name)
-    print(model.config)
-    serialize_model_to_binary(model.config, merge_weight_normalization(model.state_dict()), f'./scripts/vits-spanish.ggml')
-    print("Done!")
+    for model_name, file_name in [("facebook/mms-tts-eng", f'./scripts/vits-english.ggml'), ("facebook/mms-tts-spa", f'./scripts/vits-spanish.ggml')]:
+        model = VitsModel.from_pretrained(model_name)
+        tokenizer = VitsTokenizer.from_pretrained(model_name)
+        model = remove_weight_norm_from_model(model)
+        serialize_model_to_binary(model.config, model.state_dict(), tokenizer, file_name)
+        print(f"Done! Exported {model_name} to {file_name}")

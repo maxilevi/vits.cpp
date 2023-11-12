@@ -4,17 +4,13 @@
 
 #include "include/vits_model_data.h"
 #include "include/debug.h"
+#include "include/vits_tokenizer.h"
+#include "include/common.h"
 #include <fstream>
 #include <stdio.h>
-#include <stdint.h>
 #include <utility>
 #include <unordered_set>
 
-static uint32_t read_number(std::ifstream& file) {
-    uint32_t number;
-    file.read(reinterpret_cast<char*>(&number), sizeof(uint32_t));
-    return number;
-}
 
 struct ggml_tensor* load_tensor(struct ggml_context* ctx, std::ifstream& file, const std::string& tensor_name, int shape_len, const std::vector<int64_t>& tensor_shape, uint32_t tensor_bytes_len) {
     int nelements = tensor_bytes_len / sizeof(float);
@@ -38,12 +34,15 @@ struct ggml_tensor* load_tensor(struct ggml_context* ctx, std::ifstream& file, c
     return tensor;
 }
 
-std::pair<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std::string, std::string>> load_model_from_bytes(const char* filename, ggml_context* ctx) {
+std::tuple<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std::string, std::string>, std::unique_ptr<vits_tokenizer>> load_model_from_bytes(const char* filename, ggml_context* ctx) {
     std::unordered_map<std::string, ggml_tensor*> tensors;
     std::ifstream file(filename, std::ios::binary);
     if (!file.is_open()) {
         throw std::runtime_error("Error opening file!");
     }
+
+    // Here read tokenizer
+    auto tokenizer = vits_tokenizer::load(file);
 
     // Read config
     std::unordered_map<std::string, std::string> config;
@@ -97,15 +96,14 @@ std::pair<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std:
     }
     printf("Loaded %lu tensors\n", tensors.size());
     file.close();
-    return std::make_pair(tensors, config);
+    return std::make_tuple(tensors, config, std::move(tokenizer));
 }
 
 std::unique_ptr<vits_model_data> vits_model_data::from_file(const char* filename, ggml_context* ctx) {
     auto tensors_and_config = load_model_from_bytes(filename, ctx);
 
-    auto tensor_map = tensors_and_config.first;
-    auto config = tensors_and_config.second;
-    return std::make_unique<vits_model_data>(tensor_map, config);
+    auto [tensor_map, config, tokenizer] = std::move(tensors_and_config);
+    return std::make_unique<vits_model_data>(tensor_map, config, std::move(tokenizer));
 }
 
 std::string join(const std::vector<std::string>& vec, const std::string& delimiter) {
@@ -119,9 +117,10 @@ std::string join(const std::vector<std::string>& vec, const std::string& delimit
     return result;
 }
 
-vits_model_data::vits_model_data(std::unordered_map<std::string, ggml_tensor*> tensor_map, std::unordered_map<std::string, std::string> config) {
+vits_model_data::vits_model_data(std::unordered_map<std::string, ggml_tensor*> tensor_map, std::unordered_map<std::string, std::string> config, std::unique_ptr<vits_tokenizer> tokenizer) {
     this->tensor_map = std::move(tensor_map);
     this->config = std::move(config);
+    this->tokenizer = std::move(tokenizer);
 }
 
 std::unique_ptr<prefix_guard> vits_model_data::use(std::string name) {

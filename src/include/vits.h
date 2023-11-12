@@ -16,7 +16,7 @@ class vits_model {
 private:
     int speaking_rate;
     std::unique_ptr<vits_model_data> model;
-    struct ggml_context * ctx;
+    struct ggml_context * weights_ctx;
     struct ggml_tensor * debug_tensor;
     struct ggml_tensor * waveform;
     struct ggml_tensor * cum_duration_output;
@@ -43,12 +43,13 @@ public:
     vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model, int speaking_rate);
     ~vits_model();
     void execute_graph(struct ggml_context* ctx, struct ggml_cgraph* graph);
-    struct ggml_cgraph* build_graph_part_one(struct ggml_tensor * input_ids, struct ggml_tensor* speaker_embeddings);
-    struct ggml_cgraph* build_graph_part_two(struct ggml_tensor* input_ids, struct ggml_tensor * cum_duration, struct ggml_tensor* prior_means, struct ggml_tensor* prior_log_variances, struct ggml_tensor* speaker_embeddings, int output_length);
+    struct ggml_cgraph* build_graph_part_one(struct ggml_context* ctx, struct ggml_tensor * input_ids, struct ggml_tensor* speaker_embeddings);
+    struct ggml_cgraph* build_graph_part_two(struct ggml_context* ctx, struct ggml_tensor* input_ids, struct ggml_tensor * cum_duration, struct ggml_tensor* prior_means, struct ggml_tensor* prior_log_variances, struct ggml_tensor* speaker_embeddings, int output_length);
 
-    struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> text_encoder_graph(struct ggml_tensor* input_ids);
-    struct ggml_tensor* wavenet_graph(struct ggml_tensor* input, struct ggml_tensor* speaker_embedding);
+    struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> text_encoder_graph(struct ggml_context* ctx, struct ggml_tensor* input_ids);
+    struct ggml_tensor* wavenet_graph(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* speaker_embedding);
     struct ggml_tensor* flow_graph(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse);
+    std::pair<struct ggml_tensor*, struct ggml_tensor*> flow_graph_layer(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse);
     struct ggml_tensor* hifigan_graph(struct ggml_context* ctx, struct ggml_tensor * input_ids, struct ggml_tensor* global_conditioning);
     struct ggml_tensor* dilated_depth_separable_conv_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning);
     struct ggml_tensor* elementwise_affine_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse);
@@ -77,7 +78,7 @@ public:
             float min_bin_width = 1e-3,
             float min_bin_height = 1e-3,
             float min_derivative = 1e-3);
-    std::vector<float> process(std::string phonemes);
+    std::vector<float> process(std::string text);
 };
 
 #define VITS_API extern "C" __attribute__((visibility("default")))

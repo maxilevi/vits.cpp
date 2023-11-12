@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <vector>
 #include <memory>
+#include "vits_tokenizer.h"
 
 struct prefix_guard {
     std::vector<std::string>& prefixes;
@@ -22,11 +23,12 @@ struct prefix_guard {
 struct vits_model_data {
     std::unordered_map<std::string, ggml_tensor*> tensor_map;
     std::unordered_map<std::string, std::string> config;
+    std::unique_ptr<vits_tokenizer> tokenizer;
     std::vector<std::string> prefixes;
 
     static std::unique_ptr<vits_model_data> from_file(const char* filename, ggml_context* ctx);
 
-    vits_model_data(std::unordered_map<std::string, ggml_tensor*> tensor_map, std::unordered_map<std::string, std::string> config);
+    vits_model_data(std::unordered_map<std::string, ggml_tensor*> tensor_map, std::unordered_map<std::string, std::string> config, std::unique_ptr<vits_tokenizer> tokenizer);
 
     std::unique_ptr<prefix_guard> use(std::string name);
 
