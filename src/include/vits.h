@@ -14,6 +14,7 @@ typedef struct ggml_tensor * tensor_t;
 
 class vits_model {
 private:
+    int verbose;
     int speaking_rate;
     std::unique_ptr<vits_model_data> model;
     struct ggml_context * weights_ctx;
@@ -42,6 +43,7 @@ private:
 public:
     vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model, int speaking_rate);
     ~vits_model();
+    void log(const char* format, ...);
     void execute_graph(struct ggml_context* ctx, struct ggml_cgraph* graph);
     struct ggml_cgraph* build_graph_part_one(struct ggml_context* ctx, struct ggml_tensor * input_ids, struct ggml_tensor* speaker_embeddings);
     struct ggml_cgraph* build_graph_part_two(struct ggml_context* ctx, struct ggml_tensor* input_ids, struct ggml_tensor * cum_duration, struct ggml_tensor* prior_means, struct ggml_tensor* prior_log_variances, struct ggml_tensor* speaker_embeddings, int output_length);
@@ -55,7 +57,7 @@ public:
     struct ggml_tensor* elementwise_affine_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse);
     struct ggml_tensor* conv_flow_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse);
     struct ggml_tensor* stochastic_duration_predictor_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* speaker_embeddings, bool reverse, float noise_scale_duration);
-    struct ggml_tensor* hifigan_residual_block_graph(struct ggml_context *ctx, struct ggml_tensor *hidden_states, int kernel_size, std::vector<int> dilation, double leaky_relu_slope);
+    struct ggml_tensor* hifigan_residual_block_graph(struct ggml_context *ctx, struct ggml_tensor *hidden_states, struct ggml_tensor* buffer, int kernel_size, std::vector<int> dilation, double leaky_relu_slope);
     struct ggml_tensor* unconstrained_rational_quadratic_spline(
             struct ggml_context* ctx,
             struct ggml_tensor* inputs,
