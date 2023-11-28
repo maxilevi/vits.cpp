@@ -58,17 +58,17 @@ bool write_wav(std::string path, float* samples, size_t size) {
     // Close file
     file.close();
 
-    std::cout << "WAV file has been written" << std::endl;
+    std::cout << "WAV file '" << path << "' has been written" << std::endl;
     return true;
 }
-const char* notting_hill = "Notting Hill (1999) William, a British bookseller, meets and falls in love with Anna, a high-profile American actress. However, their relationship goes through many problems due to their different social statuses.";
+const char* notting_hill = "Hola, cómo estas? Hola, cómo estas? Hola, cómo estas? Hola, cómo estas?";
 
 
 int main(int argc, char ** argv) {
-    vits_model * model = vits_model_load_from_file("./scripts/vits-spanish.ggml");
+    vits_model * model = vits_model_load_from_file("/Users/maximilianolevi/Documents/Repositories/vits.cpp/scripts/vits-spanish.ggml");
     assert(model != nullptr);
 
-    auto result = vits_model_process(model, "Hola esto es una prueba!");
+    auto result = vits_model_process(model, notting_hill);
     printf("Generated: %d samples of audio %f %f %f\n", result.size, result.data[0], result.data[1], result.data[2]);
     printf("Wrote to file: %s\n", write_wav("output.wav", result.data, result.size) ? "true" : "false");
 

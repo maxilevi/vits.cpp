@@ -19,7 +19,7 @@ def verify_text_encoder(model, input_ids):
         input_ids=input_ids,
         padding_mask=input_padding_mask,
     )
-    print(text_encoder_output)
+    #print(text_encoder_output)
     #cpp_output = load_tensor_from_file('./text_encoder_output.txt')
 
     assert torch.allclose(text_encoder_output, cpp_output, atol=1e-3)
@@ -29,9 +29,12 @@ def verify_all(text):
     model = VitsModel.from_pretrained("facebook/mms-tts-spa")
 
     tokenizer = AutoTokenizer.from_pretrained("facebook/mms-tts-spa")
-    input_ids = tokenizer(text, return_tensors="pt").input_ids
-    print(f"Input ids: {input_ids} for '{text}'")
-    verify_text_encoder(model, input_ids)
+    inputs = tokenizer(text, return_tensors="pt")
+    print(f"Input ids: {inputs.input_ids} for '{text}'")
+
+    with torch.no_grad():
+        output = model(**inputs).waveform
+    print("OUTPUT", output)
 
 
 if __name__ == '__main__':

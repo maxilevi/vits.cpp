@@ -51,10 +51,7 @@ def serialize_model_to_binary(config, state_dict, tokenizer, file_name):
             # Write tensor type
             type_mapping = {
                 torch.float32: 0,
-                torch.float16: 1,
-                torch.int64: 2,
-                torch.int32: 3,
-                torch.int8: 4
+                torch.float16: 1
             }
             tensor_type = type_mapping.get(tensor.dtype, None)
             if tensor_type is None:
@@ -72,24 +69,32 @@ def serialize_model_to_binary(config, state_dict, tokenizer, file_name):
             f.write(struct.pack('<I', len(tensor_bytes)))
             f.write(tensor_bytes)
 
-def remove_weight_norm_from_model(module):
+def remove_weight_norm_and_convert_to_fp16(module):
+    import torch
     import torch.nn.utils.parametrize as parametrize
 
     for name, submodule in module.named_children():
-        # Check if weight normalization is applied
-        #print(str(type(submodule)))
-        if str(type(submodule)) == "<class 'torch.nn.utils.parametrize.ParametrizedConv1d'>":
-            parametrize.remove_parametrizations(submodule, 'weight', leave_parametrized=True)
-            #print(f"Removed weight norm from {name}")
+        # Check if the submodule is an instance of Conv1d or ConvTranspose1d
+        is_parametrized = str(type(submodule)) == "<class 'torch.nn.utils.parametrize.ParametrizedConv1d'>"
+        if isinstance(submodule, (torch.nn.Conv1d, torch.nn.ConvTranspose1d)) or is_parametrized:
+            # Convert weights to float16
+            if is_parametrized:
+                parametrize.remove_parametrizations(submodule, 'weight', leave_parametrized=True)
+                # Optionally print a message
+                print(f"Removed weight norm")
+
+            submodule.weight.data = submodule.weight.data.to(torch.float16)
+            print(f"Converted {name} weights to float16")
 
         # Recursively apply to children modules
-        remove_weight_norm_from_model(submodule)
+        remove_weight_norm_and_convert_to_fp16(submodule)
+
     return module
 
 if __name__ == '__main__':
     for model_name, file_name in [("facebook/mms-tts-eng", f'./scripts/vits-english.ggml'), ("facebook/mms-tts-spa", f'./scripts/vits-spanish.ggml')]:
         model = VitsModel.from_pretrained(model_name)
         tokenizer = VitsTokenizer.from_pretrained(model_name)
-        model = remove_weight_norm_from_model(model)
+        model = remove_weight_norm_and_convert_to_fp16(model)
         serialize_model_to_binary(model.config, model.state_dict(), tokenizer, file_name)
         print(f"Done! Exported {model_name} to {file_name}")

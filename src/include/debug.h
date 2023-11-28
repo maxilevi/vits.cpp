@@ -13,7 +13,7 @@
 
 #define SHAPE(tensor) \
 do { \
-    printf("Shape '%s' (%d):", #tensor, tensor->type); \
+    printf("Shape '%s' [%s] (%d):", #tensor, tensor->name, tensor->type); \
     for (int i = 0; i < tensor->n_dims; i++) { \
         printf(" %lld", tensor->ne[i]); \
         if(i < tensor->n_dims - 1) { \
@@ -70,15 +70,14 @@ do { \
         printf("Assert_starts_with for %s has passed\n", #tensor);                                                 \
     } while(0);
 
-
-#define PRINT_TENSOR2(tensor)                                 \
+#define PRINT_TENSOR3(tensor, T)                                 \
     do {                                                           \
         printf("%s [type: %d] (%zu, %zu, %zu, %zu), (%zu, %zu, %zu, %zu): [\n", #tensor, tensor->type, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3], tensor->nb[0], tensor->nb[1], tensor->nb[2], tensor->nb[3]);                             \
         auto ne = tensor->ne;                                      \
         auto nb0 = tensor->nb[0];                                  \
         auto nb1 = tensor->nb[1];                                  \
         auto nb2 = tensor->nb[2];                                  \
-        auto data = static_cast<float*>(tensor->data);        \
+        auto data = static_cast<T*>(tensor->data);        \
         auto indent = "    ";\
                                                                    \
         for (int64_t i = 0; i < ne[2]; ++i) {                     \
@@ -87,7 +86,7 @@ do { \
                 std::cout << indent << indent << "["; \
                 for (int64_t k = 0; k < ne[0]; ++k) {              \
                     size_t offset = (k * nb0 + j * nb1 + i * nb2)  \
-                                   / sizeof(float);                \
+                                   / ggml_element_size(tensor);                \
                     std::cout << std::fixed << std::setprecision(4) << *(data + offset) << " ";                   \
                 }                                                  \
                 std::cout << "]\n";                                 \
@@ -96,6 +95,10 @@ do { \
         }                                                          \
         printf("]\n");                                             \
     } while (0);
+
+#define PRINT_TENSOR2(tensor) PRINT_TENSOR3(tensor, float)
+#define PRINT_TENSOR_INT32(tensor) PRINT_TENSOR3(tensor, int32_t)
+#define PRINT_TENSOR_FP16(tensor) PRINT_TENSOR3(tensor, ggml_fp16_t)
 
 #define PRINT_TENSOR(tensor) \
     do { \

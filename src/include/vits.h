@@ -15,7 +15,6 @@ typedef struct ggml_tensor * tensor_t;
 class vits_model {
 private:
     int verbose;
-    int speaking_rate;
     std::unique_ptr<vits_model_data> model;
     struct ggml_context * weights_ctx;
     struct ggml_tensor * debug_tensor;
@@ -27,9 +26,9 @@ private:
     struct ggml_tensor * prior_log_variances_output;
     struct ggml_tensor * log_duration_output;
     struct ggml_tensor * latents_output;
-    int load_number(std::string key);
-    float load_float(std::string key);
-    std::string load_param(std::string key);
+    int load_number(const std::string& key);
+    float load_float(const std::string& key);
+    std::string load_param(const std::string& key);
     template<typename T>
     std::vector<T> load_vector(const std::string& key) {
         printf("Loading vector %s\n", key.c_str());
@@ -41,7 +40,7 @@ private:
 
 
 public:
-    vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model, int speaking_rate);
+    vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model);
     ~vits_model();
     void log(const char* format, ...);
     void execute_graph(struct ggml_context* ctx, struct ggml_cgraph* graph);

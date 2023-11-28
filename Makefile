@@ -12,4 +12,7 @@ clean:
 tests: build
 	./build/tests
 
-.PHONY: all build run clean
+bench: build
+	./build/bench
+
+.PHONY: all build run clean bench

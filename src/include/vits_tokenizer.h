@@ -16,6 +16,7 @@ public:
     std::string normalize_text(const std::string& input_string);
     std::string prepare_for_tokenization(const std::string& text, bool is_split_into_words = false, bool normalize = false);
     std::vector<int32_t> tokenize(const std::string& text);
+    std::vector<int32_t> tokenize_fast(const std::string& input_string);
     std::string convert_tokens_to_string(const std::vector<std::string>& tokens);
     int convert_token_to_id(const std::string& token);
 

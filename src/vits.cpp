@@ -8,10 +8,9 @@
 #include <tuple>
 #define VITS_DEBUG 0
 
-vits_model::vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model, int speaking_rate) {
+vits_model::vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model) {
     this->weights_ctx = ctx;
     this->model = std::move(model);
-    this->speaking_rate = speaking_rate;
     this->verbose = 0;
     #if VITS_DEBUG
         verbose = 1;
@@ -34,8 +33,7 @@ std::vector<int> vits_model::load_vector_impl<int>(const std::string& serialized
     char buffer[128];
     int buffer_index = 0;
 
-    for (int i = 0; i < serialized_data.size(); ++i) {
-        char item = serialized_data[i];
+    for (char item : serialized_data) {
         if (item == ' ' || item == '[' || item == ']') {
             continue;
         } else if (item == ',') {
@@ -87,7 +85,7 @@ std::vector<std::vector<int>> vits_model::load_vector_impl<std::vector<int>>(con
     return result;
 };
 
-std::string vits_model::load_param(std::string key) {
+std::string vits_model::load_param(const std::string& key) {
     this->log("Loading param for key: %s\n", key.c_str());
     auto val_str = this->model->config[key];
     if (val_str.empty())
@@ -95,13 +93,13 @@ std::string vits_model::load_param(std::string key) {
     return val_str;
 }
 
-int vits_model::load_number(std::string key) {
+int vits_model::load_number(const std::string& key) {
     auto value = std::stoi(this->load_param(key));
     this->log("%s = %d\n", key.c_str(), value);
     return value;
 }
 
-float vits_model::load_float(std::string key) {
+float vits_model::load_float(const std::string& key) {
     auto value = std::stof(this->load_param(key));
     this->log("%s = %f\n", key.c_str(), value);
     return value;
@@ -117,40 +115,40 @@ struct ggml_tensor* layer_norm(struct ggml_context* ctx, struct ggml_tensor* inp
     return cur;
 }
 
+struct ggml_tensor* mul(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* weight) {
+    input = ggml_mul_inplace(ctx, input, weight);
+    return input;
+}
+
+struct ggml_tensor* mul_mat(struct ggml_context* ctx, struct ggml_tensor* weight, struct ggml_tensor* input) {
+    return ggml_mul_mat(ctx, weight, input);
+}
+
 struct ggml_tensor* linear_with_bias(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* weight, struct ggml_tensor* bias) {
-    auto cur = ggml_mul_mat(ctx, weight, input);
+    auto cur = mul_mat(ctx, weight, input);
     cur = ggml_add_inplace(ctx, cur, bias);
     return cur;
 }
 
-struct ggml_tensor* conv1d(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, int stride = 1, int padding = 0, int dilation= 1, bool inplace = false) {
+struct ggml_tensor* conv1d(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, int stride = 1, int padding = 0, int dilation= 1) {
     ASSERT(input->n_dims == 3, "Conv only supported on 3d tensors");
-    ASSERT(input->type == GGML_TYPE_F32, "Conv only supported on f32 tensors");
-    auto proj_weights_fp16 = cast_tensor_fp32_to_fp16(ctx, proj_weights);
-    /*if (inplace) {
-        SHAPE(input)
-        return input;
-    }*/
     return ggml_conv_1d(ctx, proj_weights, input, stride, padding, dilation);
 }
 
 struct ggml_tensor* depthwise_conv_with_bias(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, struct ggml_tensor* proj_bias, int stride = 1, int padding = 0, int dilation= 1) {
     ASSERT(input->n_dims == 3, "Depth conv only supported on 3d tensors");
-    ASSERT(input->type == GGML_TYPE_F32, "Conv only supported on f32 tensors");
     auto groups_input = input->ne[1];
     auto groups_weights = proj_weights->ne[2];
     //printf("groups_input = %d, groups_weights = %d\n", groups_input, groups_weights);
     ASSERT(groups_input == groups_weights, "Groups must match");
     auto groups = groups_input;
 
-    auto proj_weights_fp16 = cast_tensor_fp32_to_fp16(ctx, proj_weights);
-
     // Each group is a 1d conv applied to a slice of the input. Depth-wise convolution
     //printf("Depthwise Convolution with %d groups\n", groups);
     auto final_result = tensor_zeros(ctx, {input->ne[0], groups, input->ne[2]});
     for(int i = 0; i < groups; i++) {
         auto input_i = slice_3d(ctx, input, 0, -1, i, (i + 1), 0, -1, false);
-        auto weights_i = slice_3d(ctx, proj_weights_fp16, 0, -1, 0, -1, i, (i + 1), true);
+        auto weights_i = slice_3d(ctx, proj_weights, 0, -1, 0, -1, i, (i + 1), true);
 
         auto result = ggml_conv_1d(ctx, weights_i, input_i, stride, padding, dilation);
         result = ggml_view_3d(ctx, result, result->ne[0], result->ne[1], result->ne[2], result->nb[1], result->nb[2], 0);
@@ -160,8 +158,8 @@ struct ggml_tensor* depthwise_conv_with_bias(struct ggml_context* ctx, struct gg
     return tensor_add_bias_inplace(ctx, final_result, proj_bias);
 }
 
-struct ggml_tensor* conv1d_with_bias(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, struct ggml_tensor* proj_bias, int stride = 1, int padding = 0, int dilation= 1, bool inplace = false) {
-    auto cur = conv1d(ctx, input, proj_weights, stride, padding, dilation, inplace);
+struct ggml_tensor* conv1d_with_bias(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, struct ggml_tensor* proj_bias, int stride = 1, int padding = 0, int dilation= 1) {
+    auto cur = conv1d(ctx, input, proj_weights, stride, padding, dilation);
     cur = ggml_view_3d(ctx, cur, cur->ne[0], cur->ne[1], cur->ne[2], cur->nb[1], cur->nb[2], 0);
     cur = tensor_add_bias_inplace(ctx, cur, proj_bias);
     return cur;
@@ -173,29 +171,15 @@ struct ggml_tensor* conv_transpose_1d_with_bias(struct ggml_context* ctx, struct
 
     auto kernel_size = proj_weights->ne[0];
     auto batch_size = input->ne[2];
-    auto in_channels = input->ne[1];
-    auto in_length = input->ne[0];
-    auto out_channels = proj_weights->ne[1];
     ASSERT(batch_size == 1, "Batch size must be 1");
 
     printf("Conv1DTranspose kernel_size = %d, stride = %d, padding = %d, dilation = %d\n", kernel_size, stride, padding, dilation);
-
-    auto proj_weights_fp16 = cast_tensor_fp32_to_fp16(ctx, proj_weights);
     padding = 0;
-    auto result = ggml_conv_transpose_1d(ctx, proj_weights_fp16, input, stride, padding, dilation);
+    auto result = ggml_conv_transpose_1d(ctx, proj_weights, input, stride, padding, dilation);
     result = ggml_view_3d(ctx, result, result->ne[0], result->ne[1], result->ne[2], result->nb[1], result->nb[2], 0);
     result = tensor_add_bias_inplace(ctx, result, proj_bias);
     return result;
-    /*
-    struct ggml_tensor* expanded_input = tensor_expand(ctx, input, stride, 0);
-    auto flipped_weights = flip_3d(ctx, proj_weights, 0);
-    auto flipped_transposed_weights = ggml_permute(ctx, flipped_weights, 0, 2, 1, 3);
-    auto cur = conv1d_with_bias(ctx, expanded_input, flipped_transposed_weights, proj_bias, 1, kernel_size - 1, 1, true);
-    auto start = padding;
-    auto end = stride > 1 ? -(padding + stride - 1) - 1 : -1;
-    auto sliced = slice_3d(ctx, cur, start, end, 0, -1, 0, -1, true);
-    return sliced;
-*/
+
 }
 
 struct ggml_tensor * get_relative_embeddings(struct ggml_context* ctx, struct ggml_tensor * relative_embeddings, int length, int window_size) {
@@ -267,6 +251,7 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
 
     cur = ggml_get_rows(ctx, model->get("embed_tokens.weight"), input_ids);
     cur = ggml_scale(ctx, cur, ggml_new_f32(ctx, (float)sqrt(hidden_size)));
+    cur = cast_tensor(ctx, cur, DEFAULT_TENSOR_TYPE);
 
     for (int i = 0; i < layer_count; i++) {
         std::string base_name = "encoder.layers." + std::to_string(i);
@@ -319,13 +304,13 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
             key_states = reshape_3d(ctx, key_states, target_shape[0], target_shape[1], target_shape[2]);
             value_states = reshape_3d(ctx, value_states, target_shape[0], target_shape[1], target_shape[2]);
 
-            auto attn_weights = ggml_mul_mat(ctx, key_states, query_states);
+            auto attn_weights = mul_mat(ctx, key_states, query_states);
 
             ASSERT(attn_weights->ne[2] == dim0 && attn_weights->ne[1] == src_len && attn_weights->ne[0] == src_len, "Shape is wrong");
 
             if (window_size > 0) {
                 auto key_relative_embeddings = get_relative_embeddings(ctx, emb_rel_k, src_len, window_size);
-                auto relative_logits = ggml_mul_mat(ctx, key_relative_embeddings, query_states);
+                auto relative_logits = mul_mat(ctx, key_relative_embeddings, query_states);
                 auto rel_pos_bias = relative_position_to_absolute_position(ctx, relative_logits);
 
                 attn_weights = ggml_add(ctx, attn_weights, rel_pos_bias);
@@ -341,7 +326,7 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
             value_states = ggml_permute(ctx, value_states, 1, 0, 2, 3);
             value_states = ggml_cont(ctx, value_states);
 
-            auto attn_output = ggml_mul_mat(ctx, value_states, attn_weights);
+            auto attn_output = mul_mat(ctx, value_states, attn_weights);
 
             ASSERT(attn_output->ne[0] == dim2 && attn_output->ne[1] == tgt_len && attn_output->ne[2] == dim0, "`attn_output` size mismatch");
 
@@ -350,7 +335,7 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
                 auto relative_weights = absolute_position_to_relative_position(ctx, attn_weights);
                 value_relative_embeddings = ggml_permute(ctx, value_relative_embeddings, 1, 0, 2, 3);
                 value_relative_embeddings = ggml_cont(ctx, value_relative_embeddings);
-                auto rel_pos_bias = ggml_mul_mat(ctx, value_relative_embeddings, relative_weights);
+                auto rel_pos_bias = mul_mat(ctx, value_relative_embeddings, relative_weights);
                 attn_output = ggml_add(ctx, attn_output, rel_pos_bias);
             }
 
@@ -369,8 +354,10 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
         // Layer norm
         {
             auto _ = model->use("layer_norm");
-            cur = ggml_add(ctx, cur, residual);
+            cur = ggml_add(ctx, residual, cur);
             cur = layer_norm(ctx, cur, model->get("weight"), model->get("bias"), layer_norm_eps);
+            if (cur->n_dims == 2)
+                cur = unsqueeze(ctx, cur, 2);
             ggml_format_name(cur, "result_layer_norm_%d", i);
         }
 
@@ -414,7 +401,8 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
         // Final layer norm
         {
             auto _ = model->use("final_layer_norm");
-            cur = ggml_cont(ctx, cur);
+            if (!ggml_is_contiguous(cur))
+                cur = ggml_cont(ctx, cur);
             cur = ggml_add(ctx, cur, residual);
             cur = layer_norm(ctx, cur, model->get("weight"), model->get("bias"), layer_norm_eps);
         }
@@ -447,7 +435,6 @@ struct ggml_tensor* add_tanh_sigmoid_multiply_inplace(struct ggml_context* ctx, 
     auto tanh = ggml_tanh_inplace(ctx, in_act_slice_tanh);
     auto sigmoid = tensor_sigmoid_inplace(ctx, in_act_slice_sigmoid);
     auto out = ggml_mul_inplace(ctx, tanh, sigmoid);
-
     return out;
 }
 
@@ -549,32 +536,32 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
     auto cur = buffer;
     this->log("Residual block with kernel_size = %d, dilation = %d\n", kernel_size, dilation[0]);
     for (int i = 0; i < dilation.size(); i++) {
-        cur = tensor_set_inplace(ctx, cur, residual, 0, 0, 0);
+
+        cur = ggml_dup_tensor(ctx, residual);//tensor_set_inplace(ctx, cur, residual, 0, 0, 0);
         {
             auto _0 = model->use("convs1." + std::to_string(i));
-            cur = leaky_relu_inplace(ctx, cur, leaky_relu_slope);
-            cur = conv1d_with_bias(ctx, cur,
+            cur = tensor_leaky_relu_inplace(ctx, cur, leaky_relu_slope);
+            cur = conv1d(ctx, cur,
                                    this->model->get("weight"),
-                                   this->model->get("bias"),
                                    1,
                                    get_padding_hifigan_residual_block(kernel_size, dilation[i]),
-                                   dilation[i],
-                                   true
+                                   dilation[i]
             );
+            cur = tensor_add_bias_inplace(ctx, cur, this->model->get("bias"));
         }
 
         {
             auto _0 = model->use("convs2." + std::to_string(i));
-            cur = leaky_relu_inplace(ctx, cur, leaky_relu_slope);
-            cur = conv1d_with_bias(ctx, cur,
+            cur = tensor_leaky_relu_inplace(ctx, cur, leaky_relu_slope);
+            cur = conv1d(ctx, cur,
                                    this->model->get("weight"),
-                                   this->model->get("bias"),
                                    1,
                                    get_padding_hifigan_residual_block(kernel_size, 1),
-                                   1,
-                                   true
+                                   1
             );
+            cur = tensor_add_bias_inplace(ctx, cur, this->model->get("bias"));
         }
+
         residual = ggml_add(ctx, residual, cur);
     }
     return residual;
@@ -598,24 +585,24 @@ struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct g
         }
     }
 
-
     auto hidden_states = conv1d_with_bias(ctx, spectogram, this->model->get("conv_pre.weight"), this->model->get("conv_pre.bias"), 1, 3, true);
 
     if (global_conditioning != nullptr) {
         ASSERT(false, "Not implemented");
     }
 
-    for(int i = 0; i < num_upsamples; ++i)
+    auto scale = ggml_new_f32(ctx, (float) (1.0 / num_kernels));
+
+    for (int i = 0; i < num_upsamples; ++i)
     {
         {
             auto _0 = model->use("upsampler." + std::to_string(i));
-            hidden_states = leaky_relu_inplace(ctx, hidden_states, leaky_relu_slope);
+            hidden_states = tensor_leaky_relu_inplace(ctx, hidden_states, leaky_relu_slope);
             auto padding = (int) ((upsample_kernel_sizes[i] - upsample_rates[i]) / 2);
 
             hidden_states = conv_transpose_1d_with_bias(ctx, hidden_states, this->model->get("weight"), this->model->get("bias"), upsample_rates[i], padding, 1);
-
         }
-
+        //hidden_states = cast_tensor(ctx, hidden_states, GGML_TYPE_F16);
         {
             struct ggml_tensor* res_state = nullptr;
             struct ggml_tensor* buffer = zeros_like(ctx, hidden_states);
@@ -630,12 +617,15 @@ struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct g
                     res_state = ggml_add_inplace(ctx, res_state, block_res);
                 }
             }
+            //res_state = cast_tensor(ctx, res_state, GGML_TYPE_F32);
             res_state = ggml_cont(ctx, res_state);
-            hidden_states = ggml_scale_inplace(ctx, res_state, ggml_new_f32(ctx, (float) (1.0 / num_kernels)));
+            hidden_states = ggml_scale_inplace(ctx, res_state, scale);
         }
     }
-    hidden_states = leaky_relu_inplace(ctx, hidden_states, leaky_relu_slope);
-    hidden_states = conv1d(ctx, hidden_states, this->model->get("conv_post.weight"), 1, 3, 1, true);
+    hidden_states = tensor_leaky_relu_inplace(ctx, hidden_states, leaky_relu_slope);
+    hidden_states = conv1d(ctx, hidden_states, this->model->get("conv_post.weight"), 1, 3, 1);
+    hidden_states = cast_tensor(ctx, hidden_states, GGML_TYPE_F32);
+
     auto waveform = ggml_tanh(ctx, hidden_states);
     return waveform;
 }
@@ -688,7 +678,7 @@ struct ggml_tensor* vits_model::dilated_depth_separable_conv_graph(struct ggml_c
     return inputs;
 }
 
-static int iwk = 0;
+
 struct ggml_tensor* vits_model::rational_quadratic_spline(
         struct ggml_context* ctx,
         struct ggml_tensor* inputs,
@@ -701,6 +691,7 @@ struct ggml_tensor* vits_model::rational_quadratic_spline(
         float min_bin_height,
         float min_derivative)
 {
+
     ASSERT(reverse, "Non reverse not supported");
     this->log("Rational quadratic spline\n");
 
@@ -714,7 +705,7 @@ struct ggml_tensor* vits_model::rational_quadratic_spline(
 
     auto widths = ggml_soft_max(ctx, unnormalized_widths);
     widths = ggml_scale(ctx, widths, ggml_new_f32(ctx, min_bin_width + (1 - min_bin_width * num_bins)));
-    auto cumwidths = per_row_cumsum(ctx, widths);
+    auto cumwidths = tensor_per_row_cumsum(ctx, widths);
 
     cumwidths = pad_3d(ctx, cumwidths, {0, 0, 0, 0, 1, 0});
     cumwidths = ggml_add(ctx, ggml_scale(ctx, cumwidths, ggml_new_f32(ctx, upper_bound - lower_bound)), tensor_like(ctx, cumwidths, lower_bound));
@@ -726,11 +717,11 @@ struct ggml_tensor* vits_model::rational_quadratic_spline(
       slice_3d(ctx, cumwidths, 0, -2, 0, -1, 0, -1)
     );
 
-    auto derivatives = ggml_add(ctx, softplus(ctx, unnormalized_derivatives), tensor_like(ctx, unnormalized_derivatives, min_derivative));
+    auto derivatives = ggml_add(ctx, tensor_softplus(ctx, unnormalized_derivatives), tensor_like(ctx, unnormalized_derivatives, min_derivative));
 
     auto heights = ggml_soft_max(ctx, unnormalized_heights);
     heights = ggml_add(ctx, ggml_scale(ctx, heights, ggml_new_f32(ctx, (1 - min_bin_height * num_bins))), tensor_like(ctx, heights, min_bin_height));
-    auto cumheights = per_row_cumsum(ctx, heights);
+    auto cumheights = tensor_per_row_cumsum(ctx, heights);
 
     cumheights = pad_3d(ctx, cumheights, {0, 0, 0, 0, 1, 0});
     cumheights = ggml_add(ctx, ggml_scale(ctx, cumheights, ggml_new_f32(ctx, upper_bound - lower_bound)), tensor_like(ctx, cumheights, lower_bound));
@@ -747,6 +738,7 @@ struct ggml_tensor* vits_model::rational_quadratic_spline(
 
     inputs = ggml_reshape_2d(ctx, inputs, 1, inputs->ne[0]);
     bin_locations = ggml_reshape_2d(ctx, bin_locations, bin_locations->ne[0], bin_locations->ne[1]);
+
     auto bin_idx_cmp = tensor_compare(ctx, inputs, bin_locations, [](float a, float b) { return a >= b; });
     auto bin_idx_sum_rows = ggml_sum_rows(ctx, bin_idx_cmp);
     auto bin_idx = ggml_sub(
@@ -810,11 +802,12 @@ struct ggml_tensor* vits_model::unconstrained_rational_quadratic_spline(
 {
     ASSERT(reverse, "Non reverse not supported");
     this->log("Unconstrained rational quadratic spline\n");
+
     auto inputs_more_than_min = tensor_compare(ctx, inputs, tensor_like(ctx, inputs, -tail_bound), [] (auto a, auto b) { return a >= b; });
     auto inputs_less_than_max = tensor_compare(ctx, inputs, tensor_like(ctx, inputs, tail_bound) , [] (auto a, auto b) { return a <= b; });
 
     auto inside_interval_mask = ggml_mul(ctx, inputs_less_than_max, inputs_more_than_min);
-    auto outside_interval_mask = tensor_not(ctx, inside_interval_mask);
+    auto outside_interval_mask = tensor_binary_not(ctx, inside_interval_mask);
 
     auto outputs = zeros_like(ctx, inputs);
     float constant = std::log(std::exp(1 - min_derivative) - 1);
@@ -907,10 +900,13 @@ struct ggml_tensor* vits_model::elementwise_affine_graph(struct ggml_context* ct
     log_scale = ggml_cont(ctx, log_scale);
     log_scale = ggml_permute(ctx, log_scale, 1, 0, 2, 3);
 
-    auto result = ggml_mul(ctx, translated, ggml_exp(ctx, log_scale));
+    auto exp = tensor_exp(ctx, log_scale);
+    auto result = ggml_mul(ctx, translated, exp);
+
     result = ggml_permute(ctx, result, 1, 0, 2, 3);
     result = ggml_cont(ctx, result);
     result = reshape_3d(ctx, result, result->ne[0], result->ne[1], 1);
+
     return result;
 }
 
@@ -943,13 +939,15 @@ struct ggml_tensor* vits_model::stochastic_duration_predictor_graph(struct ggml_
 
             latents = flip_3d(ctx, latents, 1);
             auto _0 = model->use("flows." + std::to_string(i));
+            //if (debug_tensor == nullptr)
+            //    this->debug_tensor = latents;
             if (i == 0) {
                 latents = this->elementwise_affine_graph(ctx, latents, inputs, reverse);
             } else {
                 latents = this->conv_flow_graph(ctx, latents, inputs, reverse);
             }
-
         }
+
         auto [log_duration_tensor, _] = split_3d(ctx, latents, 1, 1, 1);
         log_duration = log_duration_tensor;
     }
@@ -961,6 +959,7 @@ struct ggml_cgraph* vits_model::build_graph_part_one(struct ggml_context* ctx, s
     auto config = this->model->config;
     auto noise_scale_duration = this->load_float("noise_scale_duration");
     auto noise_scale = this->load_float("noise_scale");
+    auto speaking_rate = this->load_float("speaking_rate");
 
     auto [text_encoder_output, prior_means, prior_log_variances] = this->text_encoder_graph(ctx, input_ids);
     ASSERT_SHAPE(text_encoder_output, 192, input_ids->ne[0], 1, 0);
@@ -976,21 +975,23 @@ struct ggml_cgraph* vits_model::build_graph_part_one(struct ggml_context* ctx, s
 
     ASSERT(config["use_stochastic_duration_prediction"] == "True", "Only stochastic duration prediction is supported");
     auto log_duration = this->stochastic_duration_predictor_graph(ctx, hidden_states, speaker_embeddings, true, noise_scale_duration);
-    auto length_scale = ggml_new_f32(ctx, 1.0 / this->speaking_rate);
-    auto duration = ggml_ceil(ctx, ggml_scale(ctx, ggml_exp(ctx, log_duration), length_scale));
+    auto length_scale = ggml_new_f32(ctx, 1.0 / speaking_rate);
+    auto duration = tensor_ceil(ctx, ggml_scale(ctx, tensor_exp(ctx, log_duration), length_scale));
     this->log_duration_output = log_duration;
     ASSERT_SHAPE(this->log_duration_output, input_ids->ne[0], 1, 1, 0);
     auto predicted_lengths = ggml_clamp(ctx, ggml_sum(ctx, duration), 1, std::numeric_limits<float>::max());
     this->predicted_lengths_output = tensor_max(ctx, predicted_lengths);
-    this->cum_duration_output = per_row_cumsum(ctx, duration);
+    this->cum_duration_output = tensor_per_row_cumsum(ctx, duration);
 
     struct ggml_cgraph* gf = ggml_new_graph_custom(ctx, pow(2, 15), false);
+
     ggml_build_forward_expand(gf, this->text_encoder_output);
     ggml_build_forward_expand(gf, this->cum_duration_output);
     ggml_build_forward_expand(gf, this->log_duration_output);
     ggml_build_forward_expand(gf, this->prior_means_output);
     ggml_build_forward_expand(gf, this->prior_log_variances_output);
     ggml_build_forward_expand(gf, this->predicted_lengths_output);
+
     if (this->debug_tensor != nullptr)
         ggml_build_forward_expand(gf, this->debug_tensor);
 
@@ -1028,16 +1029,16 @@ struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, s
     prior_log_variances = ggml_cont(ctx, prior_log_variances);
     prior_log_variances = ggml_reshape_2d(ctx, prior_log_variances, prior_log_variances->ne[0], prior_log_variances->ne[1]);
 
-    prior_means = ggml_mul_mat(ctx, prior_means, attn);
+    prior_means = mul_mat(ctx, prior_means, attn);
     prior_means = ggml_permute(ctx, prior_means, 1, 0, 2, 3);
     prior_means = ggml_cont(ctx, prior_means);
 
-    prior_log_variances = ggml_mul_mat(ctx, prior_log_variances, attn);
+    prior_log_variances = mul_mat(ctx, prior_log_variances, attn);
     prior_log_variances = ggml_permute(ctx, prior_log_variances, 1, 0, 2, 3);
     prior_log_variances = ggml_cont(ctx, prior_log_variances);
 
     auto noise = tensor_randn_like(ctx, prior_means);
-    noise = ggml_mul(ctx, noise, ggml_exp(ctx, prior_log_variances));
+    noise = ggml_mul(ctx, noise, tensor_exp(ctx, prior_log_variances));
     noise = ggml_scale(ctx, noise, ggml_new_f32(ctx, noise_scale));
 
     auto prior_latents = ggml_add(ctx, prior_means, noise);
@@ -1065,7 +1066,7 @@ struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, s
 
 void vits_model::execute_graph(struct ggml_context* ctx, struct ggml_cgraph* graph) {
     printf("Allocating memory for work computation graph...\n");
-    int threads = std::max((int)std::thread::hardware_concurrency(), 4);
+    int threads = get_thread_count();
     auto plan = ggml_graph_plan(graph, threads);
     if (plan.work_size > 0) {
         plan.work_data = (uint8_t*) malloc(plan.work_size);
@@ -1103,6 +1104,7 @@ std::vector<float> vits_model::process(std::string text) {
 
     struct ggml_context * graph_one_ctx = ggml_init({.mem_size   = (size_t)512*1024*1024, .mem_buffer = nullptr});
     auto graph_one = this->build_graph_part_one(graph_one_ctx, input_ids_tensor, speaker_embeddings);
+    //ggml_graph_dump_dot(graph_one, nullptr, "graph_one.dot");
     printf("Executing graph one\n");
     printf("Graph of nodes %d\n", graph_one->n_nodes);
     auto delta = 0;
@@ -1129,7 +1131,7 @@ std::vector<float> vits_model::process(std::string text) {
     start = std::chrono::high_resolution_clock::now();
     this->execute_graph(graph_two_ctx, graph_two);
     delta += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
-
+    //ggml_graph_dump_dot(graph_two, nullptr, "graph_two.dot");
     if (this->debug_tensor != nullptr)
         PRINT_TENSOR2(this->debug_tensor);
 
@@ -1164,7 +1166,7 @@ vits_model * vits_model_load_from_file(const char * path) {
     struct ggml_context * ctx = ggml_init(params);
     printf("Initialized ggml context with %d mb\n", params.mem_size / 1024 / 1024);
     auto model_data = vits_model_data::from_file(path, ctx);
-    return new vits_model(ctx, std::move(model_data), 1.0);
+    return new vits_model(ctx, std::move(model_data));
 }
 
 void vits_free_model(vits_model * model) {

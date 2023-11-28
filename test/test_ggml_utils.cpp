@@ -37,16 +37,16 @@ struct ggml_tensor* execute_tensor(
         struct ggml_context* ctx,
         struct ggml_tensor* tensor
 ) {
-    struct ggml_cgraph graph = {};
+    struct ggml_cgraph* graph = ggml_new_graph(ctx);
 
-    ggml_build_forward_expand(&graph, tensor);
+    ggml_build_forward_expand(graph, tensor);
     int threads = std::min((int)std::thread::hardware_concurrency(), 2);
-    auto plan = ggml_graph_plan(&graph, threads);
+    auto plan = ggml_graph_plan(graph, threads);
     if (plan.work_size > 0) {
         plan.work_data = (uint8_t*) malloc(plan.work_size);
     }
 
-    ggml_graph_compute(&graph, &plan);
+    ggml_graph_compute(graph, &plan);
 
     return tensor;
 }
@@ -186,7 +186,7 @@ void assert_cumsum_is_correct(
 ) {
     std::cout << "Testing Cumsum" << std::endl;
 
-    struct ggml_tensor* result_tensor = execute_tensor(ctx, per_row_cumsum(ctx, tensor));
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_per_row_cumsum(ctx, tensor));
 
     assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Cumsum");
 
@@ -216,7 +216,7 @@ void assert_not_is_correct(
 ) {
     std::cout << "Testing Not" << std::endl;
 
-    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_not(ctx, tensor));
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_binary_not(ctx, tensor));
 
     assert_tensor_matches_expected(result_tensor, expected, expected_shape, "Not");
 
@@ -359,7 +359,23 @@ int main(int argc, char ** argv) {
     };
 
     struct ggml_context * ctx = ggml_init(params);
+    auto cur_fp32 = create_tensor_with_data_and_shape(ctx, {1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9}, 9, 2, 1);
+    auto filters_fp32 = create_tensor_with_data_and_shape(ctx, {0.5, 0.25, 0.75, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 0.5, 0.25, 0.75}, 3, 2, 2);
 
+    auto cur = ggml_new_tensor(ctx, GGML_TYPE_F16, cur_fp32->n_dims, cur_fp32->ne);
+    ggml_fp32_to_fp16_row((float*)cur_fp32->data, (ggml_fp16_t*)cur->data, ggml_nelements(cur_fp32));
+
+    auto filters = ggml_new_tensor(ctx, GGML_TYPE_F16, filters_fp32->n_dims, filters_fp32->ne);
+    ggml_fp32_to_fp16_row((float*)filters_fp32->data, (ggml_fp16_t*)filters->data, ggml_nelements(filters_fp32));
+
+    PRINT_TENSOR_FP16(cur);
+    PRINT_TENSOR_FP16(filters);
+
+    auto output = tensor_conv_1d_inplace(ctx, cur, filters, 1, 0, 1);
+    output = execute_tensor(ctx, output);
+    printf("Output:\n");
+    PRINT_TENSOR_FP16(output);
+    /*
     std::vector<float> input_ids = {1, 2, 3, 4, 5, 6};
     auto input_ids_tensor = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 3, 2, 1);
     memcpy(input_ids_tensor->data, input_ids.data(), ggml_element_size(input_ids_tensor) * input_ids.size());
@@ -498,7 +514,7 @@ int main(int argc, char ** argv) {
          {2, 4, 5},
          {3}
     );
-*/
+
     assert_gather_is_correct(
             ctx,
             input_ids_tensor,
@@ -515,6 +531,6 @@ int main(int argc, char ** argv) {
             {6, 1, 1}
             );
 
-
+*/
     return 0;
 }

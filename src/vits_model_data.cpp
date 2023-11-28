@@ -10,26 +10,16 @@
 #include <stdio.h>
 #include <utility>
 #include <unordered_set>
+#include <regex>
 
-
-struct ggml_tensor* load_tensor(struct ggml_context* ctx, std::ifstream& file, const std::string& tensor_name, int shape_len, const std::vector<int64_t>& tensor_shape, uint32_t tensor_bytes_len) {
-    int nelements = tensor_bytes_len / sizeof(float);
-
-    std::vector<float> fp32_data(nelements);
-    file.read(reinterpret_cast<char*>(fp32_data.data()), tensor_bytes_len);
-
-    bool convert_to_fp16 = false;
-    ggml_type target_type = convert_to_fp16 ? GGML_TYPE_F16 : GGML_TYPE_F32;
-    auto tensor = ggml_new_tensor(ctx, target_type, shape_len, tensor_shape.data());
-
-    if (convert_to_fp16) {
-        std::vector<ggml_fp16_t> fp16_data(nelements);
-        ggml_fp32_to_fp16_row(fp32_data.data(), fp16_data.data(), nelements);
-        memcpy(tensor->data, fp16_data.data(), nelements * sizeof(ggml_fp16_t));
-    } else {
-        memcpy(tensor->data, fp32_data.data(), nelements * sizeof(float));
-    }
+template<class T> struct ggml_tensor* load_tensor(struct ggml_context* ctx, std::ifstream& file, const std::string& tensor_name, int shape_len, const std::vector<int64_t>& tensor_shape, uint32_t tensor_bytes_len, ggml_type tensor_type) {
+    auto tensor = ggml_new_tensor(ctx, tensor_type, shape_len, tensor_shape.data());
     ggml_set_name(tensor, tensor_name.c_str());
+
+    std::vector<T> tensor_data(ggml_nelements(tensor));
+    file.read(reinterpret_cast<char*>(tensor_data.data()), tensor_bytes_len);
+
+    memcpy(tensor->data, tensor_data.data(), ggml_nelements(tensor) * ggml_element_size(tensor));
 
     return tensor;
 }
@@ -76,7 +66,7 @@ std::tuple<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std
         std::string tensor_name(name_bytes.begin(), name_bytes.end());
 
         // Read tensor type
-        uint32_t type_byte = read_number(file);
+        auto tensor_type = (ggml_type)read_number(file);
 
         // Read tensor shape
         uint32_t shape_len = read_number(file);
@@ -89,9 +79,15 @@ std::tuple<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std
         // Read tensor byte length and load directly from file to tensor
         uint32_t tensor_bytes_len = read_number(file);
 
-        auto tensor = load_tensor(ctx, file, tensor_name, shape_len, tensor_shape, tensor_bytes_len);
+        struct ggml_tensor* tensor;
+        if (tensor_type == GGML_TYPE_F32)
+            tensor = load_tensor<float>(ctx, file, tensor_name, shape_len, tensor_shape, tensor_bytes_len, tensor_type);
+        else if (tensor_type == GGML_TYPE_F16)
+            tensor = load_tensor<ggml_fp16_t>(ctx, file, tensor_name, shape_len, tensor_shape, tensor_bytes_len, tensor_type);
+        else
+            throw std::runtime_error("Unsupported tensor type");
 
-        printf("[%d/%d] Loaded tensor %s (%lu x %lu x %lu x %lu)\n", i, tensor_count, tensor_name.c_str(), tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]);
+        printf("[%d/%d] Loaded tensor [%d] %s (%lu x %lu x %lu x %lu)\n", i, tensor_count, tensor_type, tensor_name.c_str(), tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]);
         tensors[tensor_name] = tensor;
     }
     printf("Loaded %lu tensors\n", tensors.size());
