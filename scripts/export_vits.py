@@ -69,7 +69,7 @@ def serialize_model_to_binary(config, state_dict, tokenizer, file_name):
             f.write(struct.pack('<I', len(tensor_bytes)))
             f.write(tensor_bytes)
 
-def remove_weight_norm_and_convert_to_fp16(module):
+def remove_weight_norm_and_convert_to_fp16(module, full_name=''):
     import torch
     import torch.nn.utils.parametrize as parametrize
 
@@ -83,11 +83,12 @@ def remove_weight_norm_and_convert_to_fp16(module):
                 # Optionally print a message
                 print(f"Removed weight norm")
 
-            submodule.weight.data = submodule.weight.data.to(torch.float16)
-            print(f"Converted {name} weights to float16")
+            #if not 'resblocks' in full_name:
+            #submodule.weight.data = submodule.weight.data.to(torch.float16)
+            #print(f"Converted {name} weights to float16")
 
         # Recursively apply to children modules
-        remove_weight_norm_and_convert_to_fp16(submodule)
+        remove_weight_norm_and_convert_to_fp16(submodule, full_name + '.' + name)
 
     return module
 

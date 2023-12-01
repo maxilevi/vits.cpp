@@ -16,15 +16,16 @@
     if (duration.count() > 1)                                                                        \
         printf("Time taken by function %s: %lld ms\n",  name , duration.count());*/
 
-struct ggml_tensor* tensor_shaped_like(struct ggml_context* ctx, ggml_type type, std::vector<int64_t> shape, float value) {
+struct ggml_tensor* tensor_shaped_like(struct ggml_context* ctx, struct ggml_allocr* allocr, ggml_type type, std::vector<int64_t> shape, float value) {
     auto tensor = ggml_new_tensor(ctx, type, shape.size(), shape.data());
+    ALLOC(tensor)
     auto data_fp32 = (type == GGML_TYPE_F32)
             ? static_cast<float*>(tensor->data)
             : nullptr;
     auto data_fp16 = (type == GGML_TYPE_F16)
                 ? static_cast<ggml_fp16_t*>(tensor->data)
                 : nullptr;
-    auto size = ggml_nelements(tensor) ;
+    auto size = ggml_nelements(tensor);
     for (int i = 0; i < size; ++i) {
         if (type == GGML_TYPE_F16) {
             data_fp16[i] = ggml_fp16_t(value);
@@ -37,26 +38,30 @@ struct ggml_tensor* tensor_shaped_like(struct ggml_context* ctx, ggml_type type,
     return tensor;
 }
 
-struct ggml_tensor* tensor_zeros(struct ggml_context* ctx, std::vector<int64_t> shape) {
-    return tensor_shaped_like(ctx, DEFAULT_TENSOR_TYPE, std::move(shape), 0);
+struct ggml_tensor* tensor_zeros(struct ggml_context* ctx, struct ggml_allocr* allocr, std::vector<int64_t> shape) {
+    return tensor_shaped_like(ctx, allocr, DEFAULT_TENSOR_TYPE, std::move(shape), 0);
 }
 
-
-struct ggml_tensor* allocate_temp_i32_array(struct ggml_context* ctx, const std::vector<int>& arr) {
-    auto tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, arr.size());
-    memcpy(tensor->data, arr.data(), arr.size() * sizeof(int));
-    return tensor;
+void* allocate_temp_i32_array(const std::vector<int>& arr) {
+    void* ptr = malloc(arr.size() * sizeof(int32_t));
+    memcpy(ptr, arr.data(), arr.size() * sizeof(int));
+    return ptr;
 }
 
-struct ggml_tensor* allocate_temp_f32_array(struct ggml_context* ctx, const std::vector<float>& arr) {
-    auto tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, arr.size());
-    memcpy(tensor->data, arr.data(), arr.size() * sizeof(float));
-    return tensor;
+void* allocate_temp_f32_array(const std::vector<float>& arr) {
+    void* ptr = malloc(arr.size() * sizeof(float));
+    memcpy(ptr, arr.data(), arr.size() * sizeof(float));
+    return ptr;
+}
+
+struct ggml_tensor* cleanup(struct ggml_context* ctx, struct ggml_tensor* result, void* userdata) {
+    return ggml_map_custom1_inplace(ctx, result, [](struct ggml_tensor* dst, const struct ggml_tensor* src, int ith, int nth, void* userdata) {
+        free(userdata);
+    }, 1, userdata);
 }
 
 template<class T> T* get_temp_data(void* userdata) {
-    auto tensor = (struct ggml_tensor*) userdata;
-    return (T*) tensor->data;
+    return (T*) userdata;
 }
 
 inline int compute_index(const ggml_tensor* tensor, int i, int j, int k) {
@@ -165,8 +170,10 @@ struct ggml_tensor* name##suffix##_impl(struct ggml_context* ctx, struct ggml_te
             else                                              \
                 dst_ptr[w] = name<T>(src_ptr[w]);\
         };\
-    };\
-    return ggml_map_custom1##suffix(ctx, tensor, func, ggml_nelements(tensor) >= get_thread_count() ? GGML_N_TASKS_MAX : 1, allocate_temp_f32_array(ctx, {(float) value}));                         \
+    };                                                       \
+    auto userdata = allocate_temp_f32_array({(float) value});                                                         \
+    auto result = ggml_map_custom1##suffix(ctx, tensor, func, ggml_nelements(tensor) >= get_thread_count() ? GGML_N_TASKS_MAX : 1, userdata); \
+    return cleanup(ctx, result, userdata);                                                             \
 }                                           \
 \
 struct ggml_tensor* tensor_##name##suffix(struct ggml_context* ctx, struct ggml_tensor* tensor, double _extra = 0.0) {\
@@ -212,7 +219,9 @@ template<class T> struct ggml_tensor* flip_3d_impl(struct ggml_context* ctx, str
         });
     };
 
-    return ggml_map_custom1(ctx, tensor, func, GGML_N_TASKS_MAX, allocate_temp_i32_array(ctx, {along}));
+    auto userdata = allocate_temp_i32_array({along});
+    auto result = ggml_map_custom1(ctx, tensor, func, GGML_N_TASKS_MAX, userdata);
+    return cleanup(ctx, result, userdata);
 }
 
 template<class T> struct ggml_tensor* per_row_cumsum_impl(struct ggml_context* ctx, struct ggml_tensor* tensor) {
@@ -264,19 +273,18 @@ template <class T> struct ggml_tensor* max_element_impl(struct ggml_context* ctx
     return ggml_view_1d(ctx, max, 1, (ggml_nelements(max)-1) * ggml_element_size(max));
 }
 
-template<class T> struct ggml_tensor* repeat_impl(struct ggml_context* ctx, struct ggml_tensor* tensor, int64_t new_dim_size, int across) {
+template<class T> struct ggml_tensor* repeat_impl(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* tensor, int64_t new_dim_size, int across) {
     ASSERT(tensor->n_dims == 1, "Only 1d tensors supported");
     ASSERT(across == 0 || across == 1, "Only across == 0 || 1 supported");
     std::vector<int64_t> shape = {across == 0 ? new_dim_size : tensor->ne[0], across == 1 ? new_dim_size : tensor->ne[0]};
-    auto new_tensor = tensor_zeros(ctx, shape);
-
-    ggml_custom2_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * src0, const struct ggml_tensor * src1, int ith, int nth, void * userdata) {
+    auto new_tensor = tensor_zeros(ctx, allocr, shape);
+    ggml_custom2_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * _, const struct ggml_tensor * src1, int ith, int nth, void * userdata) {
         START_BENCH()
         auto across = *get_temp_data<int>(userdata);
         auto* dst_ptr = (T*)dst->data;
         auto* src1_ptr = (T*)src1->data;
 
-        size_t size = ggml_element_size(src0);
+        size_t size = ggml_element_size(dst);
         for_each_element_threaded(dst, ith, nth, [&] (int i, int j, int k) {
             auto idx1 = ((across == 0 ? j : i) * src1->nb[0]) / size;
             auto dst_idx = (i * dst->nb[0] + j * dst->nb[1]) / size;
@@ -285,14 +293,17 @@ template<class T> struct ggml_tensor* repeat_impl(struct ggml_context* ctx, stru
         });
         PRINT_BENCH("repeat")
     };
-    return ggml_map_custom2_inplace(
+    auto userdata = allocate_temp_i32_array({across});
+    // inplace breaks?
+    auto result = ggml_map_custom2(
             ctx,
             new_tensor,
             tensor,
             func,
-            1,
-            allocate_temp_i32_array(ctx, {across})
+            GGML_N_TASKS_MAX,
+            userdata
     );
+    return cleanup(ctx, result, userdata);
 }
 
 template<class T> struct ggml_tensor* compare_impl(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b, std::function<bool(float, float)> compare_op) {
@@ -364,14 +375,16 @@ template<class T> struct ggml_tensor* set_inplace_impl(struct ggml_context* ctx,
          * */
         PRINT_BENCH("set_inplace")
     };
-    return ggml_map_custom2_inplace(
+    auto userdata = allocate_temp_i32_array({start0, start1, start2});
+    auto result = ggml_map_custom2_inplace(
             ctx,
             tensor,
             values,
             func,
             1,
-            allocate_temp_i32_array(ctx, {start0, start1, start2})
+            userdata
     );
+    return cleanup(ctx, result, userdata);
 }
 
 template<class T> struct ggml_tensor* add_bias_inplace_impl(struct ggml_context* ctx, struct ggml_tensor* tensor, struct ggml_tensor* bias) {
@@ -566,27 +579,24 @@ struct ggml_tensor* conv_1d_inplace_impl_fp16(struct ggml_context* ctx, struct g
 void im2col_multi_channel(float * dst_data, const float* src_data, int num_channels, int input_length, int output_length, int kernel_size, int stride, int padding, int dilation, int ith, int nth) {
     // Precompute constants that are invariant across the inner loops
     int stride_times_dilation = stride * dilation;
-    int part_size = output_length / nth;
-    int offset = ith * part_size;
-    int lane = 4;
+    int input_length_times_num_channels = input_length * num_channels;
 
-#pragma clang loop vectorize(enable)
-    for (int i = offset; i < offset + part_size; ++i) {
+    for (int c = 0; c < num_channels; ++c) {
+        int channel_base_index = c * input_length;
+        int channel_end_index = channel_base_index + input_length;
+
         for (int j = 0; j < kernel_size; ++j) {
-#pragma unroll
-            for (int c = 0; c < num_channels; c += lane) {
-                int channel_base_index = c * input_length;
-                int channel_end_index = channel_base_index + input_length;
-                int dilation_offset = j * dilation - padding;
+            int dilation_offset = j * dilation - padding;
 
+            for (int i = 0; i < output_length; ++i) {
                 int src_index = channel_base_index + i * stride_times_dilation + dilation_offset;
-                int dst_index = (i * kernel_size + j) * num_channels + c; // Adjusted for transposition
+                int dst_index = (c * kernel_size + j) * output_length + i;
 
                 // Check bounds only once per loop iteration
                 if (src_index >= channel_base_index && src_index < channel_end_index) {
                     dst_data[dst_index] = src_data[src_index];
-                    //float32x4_t input_data = vld1q_f32(src_data + src_index);
-                    //vst1q_f32(dst_data + dst_index, input_data);
+                } else {
+                    dst_data[dst_index] = 0;
                 }
             }
         }
@@ -603,8 +613,8 @@ struct ggml_tensor* im2col_impl(struct ggml_context* ctx, struct ggml_tensor* we
     int32_t batch_size = inputs->ne[2];
 
     int32_t output_columns = ((in_length + 2 * padding - dilation * (kernel_size - 1) - 1) / stride) + 1;
-    auto dst = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, i_in_channels * kernel_size, output_columns, 1, 1);
-    memset(dst->data, 0, ggml_nbytes(dst));
+    auto dst = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, output_columns, i_in_channels * kernel_size,  1, 1);
+    //memset(dst->data, 0, ggml_nbytes(dst));
 
     //printf("Conv1d with kernel_size = %d, dilation = %d, padding = %d, channels = %d \n", kernel_size, dilation, padding, i_in_channels);
 
@@ -623,14 +633,18 @@ struct ggml_tensor* im2col_impl(struct ggml_context* ctx, struct ggml_tensor* we
         im2col_multi_channel(dst_ptr, inputs_ptr, channel_count, in_length, output_columns, kernel_size, stride, padding, dilation, ith, nth);
     };
 
+    auto userdata = allocate_temp_i32_array({stride, padding, dilation, output_columns, kernel_size, in_length, w_in_channels});
     auto result = ggml_map_custom2_inplace(
             ctx,
             dst,
             inputs,
             func,
             GGML_N_TASKS_MAX,
-            allocate_temp_i32_array(ctx, {stride, padding, dilation, output_columns, kernel_size, in_length, w_in_channels})
+            userdata
     );
+    result = cleanup(ctx, result, userdata);
+    //result = ggml_permute(ctx, result, 1, 0, 2, 3);
+    //result = ggml_cont(ctx, result);
     return result;
 }
 
@@ -836,8 +850,8 @@ struct ggml_tensor* tensor_per_row_cumsum(struct ggml_context* ctx, struct ggml_
     TENSOR_OP_IMPL(per_row_cumsum, tensor, ctx, tensor);
 }
 
-struct ggml_tensor* tensor_repeat(struct ggml_context* ctx, struct ggml_tensor* tensor, size_t new_dim_size, int across) {
-    TENSOR_OP_IMPL(repeat, tensor, ctx, tensor, new_dim_size, across);
+struct ggml_tensor* tensor_repeat(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* tensor, size_t new_dim_size, int across) {
+    TENSOR_OP_IMPL(repeat, tensor, ctx, allocr, tensor, new_dim_size, across);
 }
 
 struct ggml_tensor* tensor_compare(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b, std::function<bool(float, float)> compare_op) {

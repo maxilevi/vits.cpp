@@ -69,8 +69,11 @@ int main(int argc, char ** argv) {
     assert(model != nullptr);
 
     auto result = vits_model_process(model, notting_hill);
-    printf("Generated: %d samples of audio %f %f %f\n", result.size, result.data[0], result.data[1], result.data[2]);
-    printf("Wrote to file: %s\n", write_wav("output.wav", result.data, result.size) ? "true" : "false");
+    if (result.size > 0) {
+        printf("Generated: %d samples of audio %f %f %f\n", result.size, result.data[0], result.data[1],
+               result.data[2]);
+        printf("Wrote to file: %s\n", write_wav("output.wav", result.data, result.size) ? "true" : "false");
+    }
 
     vits_free_result(result);
     vits_free_model(model);

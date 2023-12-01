@@ -253,7 +253,7 @@ void assert_arange_is_correct(
 ) {
     std::cout << "Testing arange" << std::endl;
 
-    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_arange(ctx, range));
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, tensor_arange(ctx, nullptr, range));
 
     assert_tensor_matches_expected(result_tensor, expected, expected_shape, "arange");
 
@@ -270,7 +270,7 @@ void assert_index_put_last_dim_is_correct(
 ) {
     std::cout << "Testing index_put_last_dim" << std::endl;
 
-    struct ggml_tensor* result_tensor = execute_tensor(ctx, index_put_last_dim(ctx, tensor, index, value));
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, index_put_last_dim(ctx, nullptr, tensor, index, value));
 
     assert_tensor_matches_expected(result_tensor, expected, expected_shape, "index_put_last_dim");
 
@@ -287,7 +287,7 @@ void assert_index_add_last_dim_is_correct(
 ) {
     std::cout << "Testing index_add_last_dim" << std::endl;
 
-    struct ggml_tensor* result_tensor = execute_tensor(ctx, index_add_last_dim(ctx, tensor, index, value));
+    struct ggml_tensor* result_tensor = execute_tensor(ctx, index_add_last_dim(ctx, nullptr, tensor, index, value));
 
     assert_tensor_matches_expected(result_tensor, expected, expected_shape, "index_add_last_dim");
 

@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <vector>
 #include <sstream>
+#include <ggml/ggml-alloc.h>
 #include "vits_model_data.h"
 
 typedef struct ggml_tensor * tensor_t;
@@ -16,16 +17,16 @@ class vits_model {
 private:
     int verbose;
     std::unique_ptr<vits_model_data> model;
-    struct ggml_context * weights_ctx;
-    struct ggml_tensor * debug_tensor;
-    struct ggml_tensor * waveform;
-    struct ggml_tensor * cum_duration_output;
-    struct ggml_tensor * predicted_lengths_output;
-    struct ggml_tensor * text_encoder_output;
-    struct ggml_tensor * prior_means_output;
-    struct ggml_tensor * prior_log_variances_output;
-    struct ggml_tensor * log_duration_output;
-    struct ggml_tensor * latents_output;
+    struct ggml_context * weights_ctx = nullptr;
+    struct ggml_tensor * debug_tensor = nullptr;
+    struct ggml_tensor * waveform = nullptr;
+    struct ggml_tensor * cum_duration_output = nullptr;
+    struct ggml_tensor * predicted_lengths_output = nullptr;
+    struct ggml_tensor * text_encoder_output = nullptr;
+    struct ggml_tensor * prior_means_output = nullptr;
+    struct ggml_tensor * prior_log_variances_output = nullptr;
+    struct ggml_tensor * log_duration_output = nullptr;
+    struct ggml_tensor * latents_output = nullptr;
     int load_number(const std::string& key);
     float load_float(const std::string& key);
     std::string load_param(const std::string& key);
@@ -45,13 +46,13 @@ public:
     void log(const char* format, ...);
     void execute_graph(struct ggml_context* ctx, struct ggml_cgraph* graph);
     struct ggml_cgraph* build_graph_part_one(struct ggml_context* ctx, struct ggml_tensor * input_ids, struct ggml_tensor* speaker_embeddings);
-    struct ggml_cgraph* build_graph_part_two(struct ggml_context* ctx, struct ggml_tensor* input_ids, struct ggml_tensor * cum_duration, struct ggml_tensor* prior_means, struct ggml_tensor* prior_log_variances, struct ggml_tensor* speaker_embeddings, int output_length);
+    struct ggml_cgraph* build_graph_part_two(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* input_ids, struct ggml_tensor * cum_duration, struct ggml_tensor* prior_means, struct ggml_tensor* prior_log_variances, struct ggml_tensor* speaker_embeddings, int output_length);
 
     struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> text_encoder_graph(struct ggml_context* ctx, struct ggml_tensor* input_ids);
-    struct ggml_tensor* wavenet_graph(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* speaker_embedding);
-    struct ggml_tensor* flow_graph(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse);
-    std::pair<struct ggml_tensor*, struct ggml_tensor*> flow_graph_layer(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse);
-    struct ggml_tensor* hifigan_graph(struct ggml_context* ctx, struct ggml_tensor * input_ids, struct ggml_tensor* global_conditioning);
+    struct ggml_tensor* wavenet_graph(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* input, struct ggml_tensor* speaker_embedding);
+    struct ggml_tensor* flow_graph(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse);
+    std::pair<struct ggml_tensor*, struct ggml_tensor*> flow_graph_layer(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse);
+    struct ggml_tensor* hifigan_graph(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor * input_ids, struct ggml_tensor* global_conditioning);
     struct ggml_tensor* dilated_depth_separable_conv_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning);
     struct ggml_tensor* elementwise_affine_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse);
     struct ggml_tensor* conv_flow_graph(struct ggml_context* ctx, struct ggml_tensor * inputs, struct ggml_tensor* global_conditioning, bool reverse);

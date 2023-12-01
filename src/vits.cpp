@@ -146,7 +146,7 @@ struct ggml_tensor* depthwise_conv_with_bias(struct ggml_context* ctx, struct gg
 
     // Each group is a 1d conv applied to a slice of the input. Depth-wise convolution
     //printf("Depthwise Convolution with %d groups\n", groups);
-    auto final_result = tensor_zeros(ctx, {input->ne[0], groups, input->ne[2]});
+    auto final_result = tensor_zeros(ctx, nullptr, {input->ne[0], groups, input->ne[2]});
     for(int i = 0; i < groups; i++) {
         auto input_i = slice_3d(ctx, input, 0, -1, i, (i + 1), 0, -1, false);
         auto weights_i = slice_3d(ctx, proj_weights, 0, -1, 0, -1, i, (i + 1), true);
@@ -439,7 +439,7 @@ struct ggml_tensor* add_tanh_sigmoid_multiply_inplace(struct ggml_context* ctx, 
     return out;
 }
 
-struct ggml_tensor* vits_model::wavenet_graph(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* global_conditioning) {
+struct ggml_tensor* vits_model::wavenet_graph(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* inputs, struct ggml_tensor* global_conditioning) {
     auto num_layers = this->load_number("prior_encoder_num_wavenet_layers");
     auto hidden_size = this->load_number("hidden_size");
     auto wavenet_dilation_rate = this->load_number("wavenet_dilation_rate");
@@ -447,7 +447,7 @@ struct ggml_tensor* vits_model::wavenet_graph(struct ggml_context* ctx, struct g
     auto speaker_embedding_size = this->load_number("speaker_embedding_size");
 
     auto _ = model->use("wavenet");
-    auto outputs = zeros_like(ctx, inputs);
+    auto outputs = zeros_like(ctx, allocr, inputs);
     ASSERT(global_conditioning == nullptr, "Not implemented");
 
     for (int i = 0; i < num_layers; ++i) {
@@ -462,7 +462,7 @@ struct ggml_tensor* vits_model::wavenet_graph(struct ggml_context* ctx, struct g
                 if (global_conditioning != nullptr) {
                     ASSERT(false, "Global conditioning not implemented");
                 } else {
-                    global_states = zeros_like(ctx, hidden_states);
+                    global_states = zeros_like(ctx, allocr, hidden_states);
                 }
 
                 acts = add_tanh_sigmoid_multiply_inplace(ctx, hidden_states, global_states, hidden_size);
@@ -487,12 +487,12 @@ struct ggml_tensor* vits_model::wavenet_graph(struct ggml_context* ctx, struct g
     return outputs;
 }
 
-std::pair<struct ggml_tensor*, struct ggml_tensor*> vits_model::flow_graph_layer(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse) {
+std::pair<struct ggml_tensor*, struct ggml_tensor*> vits_model::flow_graph_layer(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse) {
     auto half_channels = this->load_number("flow_size") / 2;
     auto [first_half, second_half] = split_3d(ctx, inputs, half_channels, half_channels, 1);
     auto hidden_states = conv1d_with_bias(ctx, first_half, this->model->get("conv_pre.weight"),
                                           this->model->get("conv_pre.bias"));
-    hidden_states = this->wavenet_graph(ctx, hidden_states, conditioning);
+    hidden_states = this->wavenet_graph(ctx, allocr, hidden_states, conditioning);
     auto mean = conv1d_with_bias(ctx, hidden_states, this->model->get("conv_post.weight"),
                                  this->model->get("conv_post.bias"), true);
 
@@ -506,7 +506,7 @@ std::pair<struct ggml_tensor*, struct ggml_tensor*> vits_model::flow_graph_layer
     return std::make_pair(cur, nullptr);
 }
 
-struct ggml_tensor* vits_model::flow_graph(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse) {
+struct ggml_tensor* vits_model::flow_graph(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* inputs, struct ggml_tensor* conditioning, bool reverse) {
     ASSERT(reverse, "Non reverse not supported");
 
     auto _0 = model->use("flow");
@@ -520,7 +520,7 @@ struct ggml_tensor* vits_model::flow_graph(struct ggml_context* ctx, struct ggml
         {
             auto _1 = model->use("flows." + std::to_string(i));
             cur = flip_3d(ctx, cur, 1);
-            auto [new_cur, _] = this->flow_graph_layer(ctx, cur, conditioning, reverse);
+            auto [new_cur, _] = this->flow_graph_layer(ctx, allocr, cur, conditioning, reverse);
             cur = new_cur;
         }
     }
@@ -542,11 +542,12 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
         {
             auto _0 = model->use("convs1." + std::to_string(i));
             cur = tensor_leaky_relu_inplace(ctx, cur, leaky_relu_slope);
-            cur = tensor_conv_1d(ctx, cur,
-                         this->model->get("weight"),
-                                   1,
-                                   get_padding_hifigan_residual_block(kernel_size, dilation[i]),
-                                   dilation[i]
+            cur = conv1d(ctx,
+                        cur,
+                        this->model->get("weight"),
+                        1,
+                        get_padding_hifigan_residual_block(kernel_size, dilation[i]),
+                        dilation[i]
             );
             cur = tensor_add_bias_inplace(ctx, cur, this->model->get("bias"));
         }
@@ -554,11 +555,12 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
         {
             auto _0 = model->use("convs2." + std::to_string(i));
             cur = tensor_leaky_relu_inplace(ctx, cur, leaky_relu_slope);
-            cur = tensor_conv_1d(ctx, cur,
-                         this->model->get("weight"),
-                                   1,
-                                   get_padding_hifigan_residual_block(kernel_size, 1),
-                                   1
+            cur = conv1d(ctx,
+                    cur,
+                    this->model->get("weight"),
+                    1,
+                    get_padding_hifigan_residual_block(kernel_size, 1),
+                    1
             );
             cur = tensor_add_bias_inplace(ctx, cur, this->model->get("bias"));
         }
@@ -568,7 +570,7 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
     return residual;
 }
 
-struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct ggml_tensor * spectogram, struct ggml_tensor* global_conditioning) {
+struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor * spectogram, struct ggml_tensor* global_conditioning) {
     auto _ = model->use("decoder");
     auto upsample_rates = this->load_vector<int>("upsample_rates");
     auto upsample_kernel_sizes = this->load_vector<int>("upsample_kernel_sizes");
@@ -606,7 +608,7 @@ struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct g
         //hidden_states = cast_tensor(ctx, hidden_states, GGML_TYPE_F16);
         {
             struct ggml_tensor* res_state = nullptr;
-            struct ggml_tensor* buffer = zeros_like(ctx, hidden_states);
+            struct ggml_tensor* buffer = zeros_like(ctx, allocr, hidden_states);
             for (auto j = 0; j < num_kernels; ++j) {
                 auto idx = i * num_kernels + j;
                 auto _0 = model->use("resblocks." + std::to_string(idx));
@@ -709,25 +711,25 @@ struct ggml_tensor* vits_model::rational_quadratic_spline(
     auto cumwidths = tensor_per_row_cumsum(ctx, widths);
 
     cumwidths = pad_3d(ctx, cumwidths, {0, 0, 0, 0, 1, 0});
-    cumwidths = ggml_add(ctx, ggml_scale(ctx, cumwidths, ggml_new_f32(ctx, upper_bound - lower_bound)), tensor_like(ctx, cumwidths, lower_bound));
-    cumwidths = index_put_last_dim(ctx, cumwidths, 0, lower_bound);
-    cumwidths = index_put_last_dim(ctx, cumwidths, -1, upper_bound);
+    cumwidths = ggml_add(ctx, ggml_scale(ctx, cumwidths, ggml_new_f32(ctx, upper_bound - lower_bound)), tensor_like(ctx, nullptr, cumwidths, lower_bound));
+    cumwidths = index_put_last_dim(ctx, nullptr, cumwidths, 0, lower_bound);
+    cumwidths = index_put_last_dim(ctx, nullptr, cumwidths, -1, upper_bound);
 
     widths = ggml_sub(ctx,
       slice_3d(ctx, cumwidths, 1, -1, 0, -1, 0, -1),
       slice_3d(ctx, cumwidths, 0, -2, 0, -1, 0, -1)
     );
 
-    auto derivatives = ggml_add(ctx, tensor_softplus(ctx, unnormalized_derivatives), tensor_like(ctx, unnormalized_derivatives, min_derivative));
+    auto derivatives = ggml_add(ctx, tensor_softplus(ctx, unnormalized_derivatives), tensor_like(ctx, nullptr, unnormalized_derivatives, min_derivative));
 
     auto heights = ggml_soft_max(ctx, unnormalized_heights);
-    heights = ggml_add(ctx, ggml_scale(ctx, heights, ggml_new_f32(ctx, (1 - min_bin_height * num_bins))), tensor_like(ctx, heights, min_bin_height));
+    heights = ggml_add(ctx, ggml_scale(ctx, heights, ggml_new_f32(ctx, (1 - min_bin_height * num_bins))), tensor_like(ctx, nullptr, heights, min_bin_height));
     auto cumheights = tensor_per_row_cumsum(ctx, heights);
 
     cumheights = pad_3d(ctx, cumheights, {0, 0, 0, 0, 1, 0});
-    cumheights = ggml_add(ctx, ggml_scale(ctx, cumheights, ggml_new_f32(ctx, upper_bound - lower_bound)), tensor_like(ctx, cumheights, lower_bound));
-    cumheights = index_put_last_dim(ctx, cumheights, 0, lower_bound);
-    cumheights = index_put_last_dim(ctx, cumheights, -1, upper_bound);
+    cumheights = ggml_add(ctx, ggml_scale(ctx, cumheights, ggml_new_f32(ctx, upper_bound - lower_bound)), tensor_like(ctx, nullptr, cumheights, lower_bound));
+    cumheights = index_put_last_dim(ctx, nullptr, cumheights, 0, lower_bound);
+    cumheights = index_put_last_dim(ctx, nullptr, cumheights, -1, upper_bound);
     heights = ggml_sub(ctx,
                        slice_3d(ctx, cumheights, 1, -1, 0, -1, 0, -1),
                        slice_3d(ctx, cumheights, 0, -2, 0, -1, 0, -1)
@@ -735,7 +737,7 @@ struct ggml_tensor* vits_model::rational_quadratic_spline(
 
     auto bin_locations = reverse ? cumheights : cumwidths;
 
-    bin_locations = index_add_last_dim(ctx, bin_locations, -1, 1e-6);
+    bin_locations = index_add_last_dim(ctx, nullptr, bin_locations, -1, 1e-6);
 
     inputs = ggml_reshape_2d(ctx, inputs, 1, inputs->ne[0]);
     bin_locations = ggml_reshape_2d(ctx, bin_locations, bin_locations->ne[0], bin_locations->ne[1]);
@@ -745,7 +747,7 @@ struct ggml_tensor* vits_model::rational_quadratic_spline(
     auto bin_idx = ggml_sub(
             ctx,
             ggml_sum_rows(ctx, bin_idx_cmp),
-            tensor_like(ctx, bin_idx_sum_rows, 1)
+            tensor_like(ctx, nullptr, bin_idx_sum_rows, 1)
     );
     bin_idx = ggml_reshape_1d(ctx, bin_idx, bin_idx->ne[1]);
 
@@ -804,18 +806,18 @@ struct ggml_tensor* vits_model::unconstrained_rational_quadratic_spline(
     ASSERT(reverse, "Non reverse not supported");
     this->log("Unconstrained rational quadratic spline\n");
 
-    auto inputs_more_than_min = tensor_compare(ctx, inputs, tensor_like(ctx, inputs, -tail_bound), [] (auto a, auto b) { return a >= b; });
-    auto inputs_less_than_max = tensor_compare(ctx, inputs, tensor_like(ctx, inputs, tail_bound) , [] (auto a, auto b) { return a <= b; });
+    auto inputs_more_than_min = tensor_compare(ctx, inputs, tensor_like(ctx, nullptr, inputs, -tail_bound), [] (auto a, auto b) { return a >= b; });
+    auto inputs_less_than_max = tensor_compare(ctx, inputs, tensor_like(ctx, nullptr, inputs, tail_bound) , [] (auto a, auto b) { return a <= b; });
 
     auto inside_interval_mask = ggml_mul(ctx, inputs_less_than_max, inputs_more_than_min);
     auto outside_interval_mask = tensor_binary_not(ctx, inside_interval_mask);
 
-    auto outputs = zeros_like(ctx, inputs);
+    auto outputs = zeros_like(ctx, nullptr, inputs);
     float constant = std::log(std::exp(1 - min_derivative) - 1);
 
     unnormalized_derivatives = pad_3d(ctx, unnormalized_derivatives, {0, 0, 0, 0, 1, 1});
-    unnormalized_derivatives = index_put_last_dim(ctx, unnormalized_derivatives, 0, constant);
-    unnormalized_derivatives = index_put_last_dim(ctx, unnormalized_derivatives, -1, constant);
+    unnormalized_derivatives = index_put_last_dim(ctx, nullptr, unnormalized_derivatives, 0, constant);
+    unnormalized_derivatives = index_put_last_dim(ctx, nullptr, unnormalized_derivatives, -1, constant);
 
     outputs = tensor_masked_set(ctx, outputs, outside_interval_mask, tensor_masked_get(ctx, inputs, inside_interval_mask));
 
@@ -932,7 +934,7 @@ struct ggml_tensor* vits_model::stochastic_duration_predictor_graph(struct ggml_
     if (!reverse) {
         ASSERT(reverse, "Non reverse not supported");
     } else {
-        auto latents = tensor_randn(ctx, {inputs->ne[0], 2, inputs->ne[2]});
+        auto latents = tensor_randn(ctx, nullptr, {inputs->ne[0], 2, inputs->ne[2]});
         latents = ggml_scale(ctx, latents, ggml_new_f32(ctx, noise_scale_duration));
         auto len_flows = duration_predictor_num_flows; // flows + elementwise affine
         for(int i = len_flows; i > -1; --i) {
@@ -993,25 +995,27 @@ struct ggml_cgraph* vits_model::build_graph_part_one(struct ggml_context* ctx, s
     ggml_build_forward_expand(gf, this->prior_log_variances_output);
     ggml_build_forward_expand(gf, this->predicted_lengths_output);
 
-    if (this->debug_tensor != nullptr)
+    if (this->debug_tensor != nullptr) {
+        //printf("debug_tensor %p\n", debug_tensor);
         ggml_build_forward_expand(gf, this->debug_tensor);
+    }
 
     this->log("Finished building graph\n");
 
     return gf;
 }
 
-struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, struct ggml_tensor* input_ids, struct ggml_tensor * cum_duration, struct ggml_tensor* prior_means, struct ggml_tensor* prior_log_variances, struct ggml_tensor* speaker_embeddings, int predicted_length) {
+struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* input_ids, struct ggml_tensor * cum_duration, struct ggml_tensor* prior_means, struct ggml_tensor* prior_log_variances, struct ggml_tensor* speaker_embeddings, int predicted_length) {
     this->log("Building graph part two, output_length %d\n", predicted_length);
     auto config = this->model->config;
     auto noise_scale_duration = this->load_float("noise_scale_duration");
     auto noise_scale = this->load_float("noise_scale");
 
-    auto indices = tensor_arange(ctx, predicted_length);
-    cum_duration = ggml_view_1d(ctx, cum_duration, cum_duration->ne[0], 0);
-    auto cum_duration_repeated = tensor_repeat(ctx, cum_duration, indices->ne[0], 0);
-    auto indices_repeated = tensor_repeat(ctx, indices, cum_duration->ne[0], 1);
+    auto indices = tensor_arange(ctx, allocr, predicted_length);
 
+    cum_duration = ggml_view_1d(ctx, cum_duration, cum_duration->ne[0], 0);
+    auto cum_duration_repeated = tensor_repeat(ctx, allocr, cum_duration, indices->ne[0], 0);
+    auto indices_repeated = tensor_repeat(ctx, allocr, indices, cum_duration->ne[0], 1);
     struct ggml_tensor* valid_indices = tensor_compare(ctx, indices_repeated, cum_duration_repeated, [](float a, float b) { return a < b; });
     valid_indices = ggml_reshape_3d(ctx, valid_indices, valid_indices->ne[0], valid_indices->ne[1], 1);
     auto padded_valid_indices = pad_3d(ctx, valid_indices, {0, 0, 1, 0, 0, 0});
@@ -1038,18 +1042,19 @@ struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, s
     prior_log_variances = ggml_permute(ctx, prior_log_variances, 1, 0, 2, 3);
     prior_log_variances = ggml_cont(ctx, prior_log_variances);
 
-    auto noise = tensor_randn_like(ctx, prior_means);
+    auto noise = tensor_randn_like(ctx, allocr, prior_means);
     noise = ggml_mul(ctx, noise, tensor_exp(ctx, prior_log_variances));
     noise = ggml_scale(ctx, noise, ggml_new_f32(ctx, noise_scale));
 
     auto prior_latents = ggml_add(ctx, prior_means, noise);
     prior_latents = reshape_3d(ctx, prior_latents, prior_latents->ne[0], prior_latents->ne[1], 1);
-    auto latents = this->flow_graph(ctx, prior_latents, speaker_embeddings, true);
+    auto latents = this->flow_graph(ctx, allocr, prior_latents, speaker_embeddings, true);
     this->latents_output = latents;
+
     //ASSERT_SHAPE(this->latents_output, 93, 192, 1, 0);
 
 
-    this->waveform = this->hifigan_graph(ctx, latents, speaker_embeddings);
+    this->waveform = this->hifigan_graph(ctx, allocr, latents, speaker_embeddings);
     SHAPE(this->waveform)
     //ASSERT_SHAPE(this->waveform, 23808, 1, 1, 1);
 
@@ -1073,13 +1078,15 @@ void vits_model::execute_graph(struct ggml_context* ctx, struct ggml_cgraph* gra
         plan.work_data = (uint8_t*) malloc(plan.work_size);
     }
     PRINT_MEM(ctx)
-    printf("Computing...\n");
+    printf("Computing with %f mb ...\n", plan.work_size / MEGABYTE);
     auto start = std::chrono::high_resolution_clock::now();
     ggml_graph_compute(graph, &plan);
     auto end = std::chrono::high_resolution_clock::now();
     auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     free(plan.work_data);
+#ifdef GGML_PERF
     //ggml_graph_print(graph);
+#endif
     printf("Computation took %lld milliseconds\n", delta);
 }
 
@@ -1090,7 +1097,7 @@ std::vector<float> vits_model::process(std::string text) {
 #else
     auto debug_mode = false;
 #endif
-    struct ggml_context * shared_ctx = ggml_init({.mem_size   = (size_t)64*1024*1024, .mem_buffer = nullptr});
+    struct ggml_context * shared_ctx = ggml_init({.mem_size   = (size_t)64 * MEGABYTE, .mem_buffer = nullptr});
 
     std::vector<int32_t> input_ids;
     if (debug_mode) {
@@ -1103,7 +1110,7 @@ std::vector<float> vits_model::process(std::string text) {
 
     struct ggml_tensor* speaker_embeddings = nullptr;
 
-    struct ggml_context * graph_one_ctx = ggml_init({.mem_size   = (size_t)128*1024*1024, .mem_buffer = nullptr});
+    struct ggml_context * graph_one_ctx = ggml_init({.mem_size   = (size_t)128 * MEGABYTE, .mem_buffer = nullptr});
     auto graph_one = this->build_graph_part_one(graph_one_ctx, input_ids_tensor, speaker_embeddings);
     //ggml_graph_dump_dot(graph_one, nullptr, "graph_one.dot");
     printf("Executing graph one\n");
@@ -1126,16 +1133,16 @@ std::vector<float> vits_model::process(std::string text) {
 
     ggml_free(graph_one_ctx);
 
-    static size_t compute_buffer_size = (size_t)128*1024*1024;
+    static size_t compute_buffer_size = (size_t)512 * MEGABYTE;
     static std::vector<uint8_t> compute_buffer(compute_buffer_size);
-    auto allocr = ggml_allocr_new(compute_buffer.data(), (size_t)256*1024*1024, GGML_MEM_ALIGN);
+    struct ggml_allocr* allocr = ggml_allocr_new(compute_buffer.data(), compute_buffer_size, GGML_MEM_ALIGN);
 
-    static size_t buf_size = (size_t)1*1024*1024;
+    static size_t buf_size = (size_t)16 * MEGABYTE;
     static std::vector<uint8_t> buf(buf_size);
     struct ggml_init_params params = {
             /*.mem_size   =*/ buf_size,
             /*.mem_buffer =*/ buf.data(),
-            /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_allocr_alloc_graph()
+            /*.no_alloc   =*/ true,
     };
 
     struct ggml_context * graph_two_ctx = ggml_init(params);
@@ -1144,7 +1151,8 @@ std::vector<float> vits_model::process(std::string text) {
     printf("Executing graph two\n");
     start = std::chrono::high_resolution_clock::now();
 
-    ggml_allocr_alloc_graph(allocr, graph_two);
+    size_t alloc_size = ggml_allocr_alloc_graph(allocr, graph_two);
+    printf("Allocated %f mb for graph two\n", alloc_size / (float)MEGABYTE);
     this->execute_graph(graph_two_ctx, graph_two);
     delta += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
     //ggml_graph_dump_dot(graph_two, nullptr, "graph_two.dot");
@@ -1166,7 +1174,7 @@ std::vector<float> vits_model::process(std::string text) {
     //if (debug_tensor != nullptr)
     //    PRINT_TENSOR2(this->debug_tensor);
 
-    auto data = std::vector<float>((float *) this->waveform->data, (float *) this->waveform->data + this->waveform->ne[0]);
+    auto data = std::vector<float>((float *) this->waveform->data, (float *) this->waveform->data + ggml_nelements(this->waveform));
     ggml_free(shared_ctx);
     ggml_free(graph_two_ctx);
     ggml_allocr_free(allocr);
