@@ -15,7 +15,7 @@ static uint32_t read_number(std::ifstream& file) {
 }
 
 static int get_thread_count() {
-    return std::min((int)std::thread::hardware_concurrency(), 6);
+    return std::max((int)std::thread::hardware_concurrency(), 6);
 }
 
 #define DEFAULT_TENSOR_TYPE GGML_TYPE_F32

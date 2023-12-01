@@ -1,4 +1,5 @@
 #include "include/vits.h"
+#include <ggml/ggml-alloc.h>
 #include "include/debug.h"
 #include "include/ggml-util.h"
 #include <memory>
@@ -150,7 +151,7 @@ struct ggml_tensor* depthwise_conv_with_bias(struct ggml_context* ctx, struct gg
         auto input_i = slice_3d(ctx, input, 0, -1, i, (i + 1), 0, -1, false);
         auto weights_i = slice_3d(ctx, proj_weights, 0, -1, 0, -1, i, (i + 1), true);
 
-        auto result = ggml_conv_1d(ctx, weights_i, input_i, stride, padding, dilation);
+        auto result = conv1d(ctx, input_i, weights_i, stride, padding, dilation);
         result = ggml_view_3d(ctx, result, result->ne[0], result->ne[1], result->ne[2], result->nb[1], result->nb[2], 0);
         final_result = tensor_set_inplace(ctx, final_result, result, 0, i, 0);
     }
@@ -537,12 +538,12 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
     this->log("Residual block with kernel_size = %d, dilation = %d\n", kernel_size, dilation[0]);
     for (int i = 0; i < dilation.size(); i++) {
 
-        cur = ggml_dup_tensor(ctx, residual);//tensor_set_inplace(ctx, cur, residual, 0, 0, 0);
+        cur = ggml_cpy(ctx, residual, cur);
         {
             auto _0 = model->use("convs1." + std::to_string(i));
             cur = tensor_leaky_relu_inplace(ctx, cur, leaky_relu_slope);
-            cur = conv1d(ctx, cur,
-                                   this->model->get("weight"),
+            cur = tensor_conv_1d(ctx, cur,
+                         this->model->get("weight"),
                                    1,
                                    get_padding_hifigan_residual_block(kernel_size, dilation[i]),
                                    dilation[i]
@@ -553,8 +554,8 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
         {
             auto _0 = model->use("convs2." + std::to_string(i));
             cur = tensor_leaky_relu_inplace(ctx, cur, leaky_relu_slope);
-            cur = conv1d(ctx, cur,
-                                   this->model->get("weight"),
+            cur = tensor_conv_1d(ctx, cur,
+                         this->model->get("weight"),
                                    1,
                                    get_padding_hifigan_residual_block(kernel_size, 1),
                                    1
@@ -562,7 +563,7 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
             cur = tensor_add_bias_inplace(ctx, cur, this->model->get("bias"));
         }
 
-        residual = ggml_add(ctx, residual, cur);
+        residual = tensor_add_fast(ctx, residual, cur);
     }
     return residual;
 }
@@ -1078,8 +1079,8 @@ void vits_model::execute_graph(struct ggml_context* ctx, struct ggml_cgraph* gra
     auto end = std::chrono::high_resolution_clock::now();
     auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     free(plan.work_data);
-    printf("Computation took %lld milliseconds\n", delta);
     //ggml_graph_print(graph);
+    printf("Computation took %lld milliseconds\n", delta);
 }
 
 std::vector<float> vits_model::process(std::string text) {
@@ -1089,7 +1090,7 @@ std::vector<float> vits_model::process(std::string text) {
 #else
     auto debug_mode = false;
 #endif
-    struct ggml_context * shared_ctx = ggml_init({.mem_size   = (size_t)256*1024*1024, .mem_buffer = nullptr});
+    struct ggml_context * shared_ctx = ggml_init({.mem_size   = (size_t)64*1024*1024, .mem_buffer = nullptr});
 
     std::vector<int32_t> input_ids;
     if (debug_mode) {
@@ -1102,7 +1103,7 @@ std::vector<float> vits_model::process(std::string text) {
 
     struct ggml_tensor* speaker_embeddings = nullptr;
 
-    struct ggml_context * graph_one_ctx = ggml_init({.mem_size   = (size_t)512*1024*1024, .mem_buffer = nullptr});
+    struct ggml_context * graph_one_ctx = ggml_init({.mem_size   = (size_t)128*1024*1024, .mem_buffer = nullptr});
     auto graph_one = this->build_graph_part_one(graph_one_ctx, input_ids_tensor, speaker_embeddings);
     //ggml_graph_dump_dot(graph_one, nullptr, "graph_one.dot");
     printf("Executing graph one\n");
@@ -1124,11 +1125,26 @@ std::vector<float> vits_model::process(std::string text) {
     auto prior_means_output_detached = tensor_detach(shared_ctx, this->prior_means_output);
 
     ggml_free(graph_one_ctx);
-    struct ggml_context * graph_two_ctx = ggml_init({.mem_size   = (size_t)16*1024*1024*1024, .mem_buffer = nullptr});
 
-    auto graph_two = this->build_graph_part_two(graph_two_ctx, input_ids_tensor, cum_duration_output_detached, prior_means_output_detached, prior_log_variances_output_detached, speaker_embeddings, predicted_length);
+    static size_t compute_buffer_size = (size_t)128*1024*1024;
+    static std::vector<uint8_t> compute_buffer(compute_buffer_size);
+    auto allocr = ggml_allocr_new(compute_buffer.data(), (size_t)256*1024*1024, GGML_MEM_ALIGN);
+
+    static size_t buf_size = (size_t)1*1024*1024;
+    static std::vector<uint8_t> buf(buf_size);
+    struct ggml_init_params params = {
+            /*.mem_size   =*/ buf_size,
+            /*.mem_buffer =*/ buf.data(),
+            /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_allocr_alloc_graph()
+    };
+
+    struct ggml_context * graph_two_ctx = ggml_init(params);
+
+    auto graph_two = this->build_graph_part_two(graph_two_ctx, allocr, input_ids_tensor, cum_duration_output_detached, prior_means_output_detached, prior_log_variances_output_detached, speaker_embeddings, predicted_length);
     printf("Executing graph two\n");
     start = std::chrono::high_resolution_clock::now();
+
+    ggml_allocr_alloc_graph(allocr, graph_two);
     this->execute_graph(graph_two_ctx, graph_two);
     delta += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
     //ggml_graph_dump_dot(graph_two, nullptr, "graph_two.dot");
@@ -1153,6 +1169,7 @@ std::vector<float> vits_model::process(std::string text) {
     auto data = std::vector<float>((float *) this->waveform->data, (float *) this->waveform->data + this->waveform->ne[0]);
     ggml_free(shared_ctx);
     ggml_free(graph_two_ctx);
+    ggml_allocr_free(allocr);
     printf("Total time %d milliseconds\n", delta);
     return data;
 }

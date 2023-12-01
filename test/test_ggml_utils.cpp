@@ -4,6 +4,7 @@
 #include <thread>
 #include <debug.h>
 #include <stdint.h>
+#include <ggml/ggml-alloc.h>
 
 void print_tensor(struct ggml_tensor* tensor, std::string name) {
     printf("%s: [", name.c_str());
@@ -45,8 +46,12 @@ struct ggml_tensor* execute_tensor(
     if (plan.work_size > 0) {
         plan.work_data = (uint8_t*) malloc(plan.work_size);
     }
-
+    auto start = std::chrono::high_resolution_clock::now();
     ggml_graph_compute(graph, &plan);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end-start).count();
+    printf("Execution time: %lu microseconds\n", duration);
+    //ggml_graph_print(graph);
 
     return tensor;
 }
@@ -353,11 +358,64 @@ struct ggml_tensor * create_tensor_1d_with_data_and_shape(struct ggml_context * 
 
 
 int main(int argc, char ** argv) {
+
+    static size_t compute_buffer_size = (size_t)128*1024*1024;
+    static std::vector<uint8_t> compute_buffer(compute_buffer_size);
+    auto allocr = ggml_allocr_new(compute_buffer.data(), (size_t)256*1024*1024, GGML_MEM_ALIGN);
+
+    static size_t buf_size = (size_t)1*1024*1024;
+    static std::vector<uint8_t> buf(buf_size);
+    struct ggml_init_params params = {
+            /*.mem_size   =*/ buf_size,
+            /*.mem_buffer =*/ buf.data(),
+            /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_allocr_alloc_graph()
+    };
+
+    struct ggml_context * graph_two_ctx = ggml_init(params);
+    auto graph = ggml_new_graph(graph_two_ctx);
+
+    //auto cur_fp32 = create_tensor_with_data_and_shape(graph_two_ctx, {1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9}, 9, 2, 1);
+    std::vector<int32_t> cur_data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    auto cur_fp32 = ggml_new_tensor_3d(graph_two_ctx, GGML_TYPE_F32, 9, 2, 1);
+    ggml_allocr_alloc(allocr, cur_fp32);
+    memcpy(cur_fp32->data, cur_data.data(), ggml_element_size(cur_fp32) * cur_data.size());
+
+    std::vector<float> filter_data = {0.5, 0.25, 0.75, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 0.5, 0.25, 0.75};
+    //auto filters_fp32 = create_tensor_with_data_and_shape(graph_two_ctx, {0.5, 0.25, 0.75, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 0.5, 0.25, 0.75}, 3, 2, 2);
+    auto filters_fp32 = ggml_new_tensor_3d(graph_two_ctx, GGML_TYPE_F32, 3, 2, 2);
+    ggml_allocr_alloc(allocr, filters_fp32);
+    memcpy(filters_fp32->data, filter_data.data(), ggml_element_size(filters_fp32) * filter_data.size());
+
+
+    auto actual = ggml_conv_1d(graph_two_ctx, cur_fp32, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+    actual = ggml_conv_1d(graph_two_ctx, actual, filters_fp32, 1, 1, 1);
+
+    ggml_build_forward_expand(graph, actual);
+    ggml_allocr_alloc_graph(allocr, graph);
+
+
+    auto plan = ggml_graph_plan(graph, 1);
+    if (plan.work_size > 0) {
+        plan.work_data = (uint8_t*) malloc(plan.work_size);
+    }
+    ggml_graph_compute(graph, &plan);
+    PRINT_TENSOR2(actual)
+
+/*
     struct ggml_init_params params = {
             .mem_size   = 256*1024*1024,
             .mem_buffer = nullptr,
     };
-
     struct ggml_context * ctx = ggml_init(params);
     auto cur_fp32 = create_tensor_with_data_and_shape(ctx, {1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9}, 9, 2, 1);
     auto filters_fp32 = create_tensor_with_data_and_shape(ctx, {0.5, 0.25, 0.75, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 0.5, 0.25, 0.75}, 3, 2, 2);
@@ -371,10 +429,26 @@ int main(int argc, char ** argv) {
     PRINT_TENSOR_FP16(cur);
     PRINT_TENSOR_FP16(filters);
 
-    auto output = tensor_conv_1d_inplace(ctx, cur, filters, 1, 0, 1);
-    output = execute_tensor(ctx, output);
+    auto output2 = im2col_impl(ctx, filters, cur_fp32, 1, 1, 1);
+    auto output3 = ggml_im2col_1d(ctx, filters, cur_fp32, 1, 1, 1);
+
+    output2 = execute_tensor(ctx, output2);
+    output3 = execute_tensor(ctx, output3);
+
+    PRINT_TENSOR_FP16(output2);
+
+    PRINT_TENSOR_FP16(output3);
+
+    auto actual = tensor_conv_1d(ctx, cur_fp32, filters_fp32, 1, 1, 1);
+    actual = execute_tensor(ctx, actual);
+
+    auto expected = ggml_conv_1d(ctx, filters, cur_fp32, 1, 1, 1);
+    expected = execute_tensor(ctx, expected);
     printf("Output:\n");
-    PRINT_TENSOR_FP16(output);
+    PRINT_TENSOR2(actual);
+    PRINT_TENSOR2(expected);
+*/
+
     /*
     std::vector<float> input_ids = {1, 2, 3, 4, 5, 6};
     auto input_ids_tensor = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 3, 2, 1);

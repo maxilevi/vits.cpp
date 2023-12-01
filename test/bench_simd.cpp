@@ -32,6 +32,28 @@ namespace HWY_NAMESPACE {
 }  // namespace HWY_NAMESPACE
 HWY_AFTER_NAMESPACE();
 
+#include <arm_neon.h>
+
+void DotProductSIMD_NEON(const float* arr1, const float* arr2, float* result, size_t size) {
+    size_t i = 0;
+    int lane = 4;
+    const size_t limit = size - size % lane;
+    float32x4_t acc = vdupq_n_f32(0.0f);
+
+    for (; i < limit; i += lane) {
+        float32x4_t a = vld1q_f32(arr1 + i);
+        float32x4_t b = vld1q_f32(arr2 + i);
+        acc = vfmaq_f32(a, b, acc);
+    }
+    float32x2_t sum = vadd_f32(vget_high_f32(acc), vget_low_f32(acc));
+    float32_t final = vget_lane_f32(vpadd_f32(sum, sum), 0);
+    *result = final;
+
+    for (; i < size; ++i) {
+        *result += arr1[i] * arr2[i];
+    }
+}
+
 template<class T> void DotProductStandard(const T* arr1, const T* arr2, T* result, size_t size) {
     T accum = 0;
     for (size_t i = 0; i < size; ++i) {
@@ -111,10 +133,10 @@ void bench_conv1d() {
     const int max_channel_count = 768;
     const int max_buffer_size = max_channel_count * max_kernel_size;
 
-    ggml_fp16_t input_buffer[max_buffer_size];
-    ggml_fp16_t kernel_buffer[max_buffer_size];
     printf("conv1d stride: %d channels: %d, kernel_size: %d, in_+length %d\n", stride, channel_count, kernel_size, in_length);
     auto start = std::chrono::high_resolution_clock::now();
+    ggml_fp16_t input_buffer[max_buffer_size];
+    ggml_fp16_t kernel_buffer[max_buffer_size];
     size_t w = 0;
     for (int co = 0; co < channel_count; ++co) {
         for (int i = 0; i < output_size; i++) {
@@ -150,8 +172,8 @@ int bench_dot() {
     const size_t numIterations = 1;
     const size_t vectorSize = 1e8;
 
-    std::vector<double> timingsStandard, timingsSIMD, timingsGGML32, timingsGGML16, timingsStandardDouble;
-    std::vector<double> errorsStandard, errorsSIMD, errorsGGML32, errorsGGML16, errorsStandardDouble;
+    std::vector<double> timingsStandard, timingsSIMD, timingsGGML32, timingsGGML16, timingsStandardDouble, timingsSIMDNeon;
+    std::vector<double> errorsStandard, errorsSIMD, errorsGGML32, errorsGGML16, errorsStandardDouble, errorsSIMDNeon;
 
     for (size_t iteration = 0; iteration < numIterations; ++iteration) {
         std::cout << "\rCurrent iteration: " << iteration << std::flush;
@@ -191,6 +213,13 @@ int bench_dot() {
         timingsSIMD.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
         errorsSIMD.push_back(fabs(resultSIMD - expectedResultDouble));
 
+        start = std::chrono::high_resolution_clock::now();
+        float resultSIMD_Neon = 0;
+        DotProductSIMD_NEON(arr1.data(), arr2.data(), &resultSIMD_Neon, vectorSize);
+        end = std::chrono::high_resolution_clock::now();
+        timingsSIMDNeon.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
+        errorsSIMDNeon.push_back(fabs(resultSIMD_Neon - expectedResultDouble));
+
         // GGML float32
         start = std::chrono::high_resolution_clock::now();
         float resultGGML32 = 0;
@@ -222,6 +251,7 @@ int bench_dot() {
     auto [meanTimingStandard, stdTimingStandard] = calculateMeanAndStd(timingsStandard);
     auto [meanErrorStandard, stdErrorStandard] = calculateMeanAndStd(errorsStandard);
     auto [meanTimingSIMD, stdTimingSIMD] = calculateMeanAndStd(timingsSIMD);
+    auto [meanTimingSIMDNeon, stdTimingSIMDNeon] = calculateMeanAndStd(timingsSIMDNeon);
     auto [meanErrorSIMD, stdErrorSIMD] = calculateMeanAndStd(errorsSIMD);
     auto [meanTimingGGML32, stdTimingGGML32] = calculateMeanAndStd(timingsGGML32);
     auto [meanErrorGGML32, stdErrorGGML32] = calculateMeanAndStd(errorsGGML32);
@@ -229,6 +259,7 @@ int bench_dot() {
     auto [meanErrorGGML16, stdErrorGGML16] = calculateMeanAndStd(errorsGGML16);
     auto [meanTimingStandardDouble, stdTimingStandardDouble] = calculateMeanAndStd(timingsStandardDouble);
     auto [meanErrorStandardDouble, stdErrorStandardDouble] = calculateMeanAndStd(errorsStandardDouble);
+    auto [meanErrorSIMDNeon, stdErrorSIMDNeon] = calculateMeanAndStd(errorsSIMDNeon);
     std::cout << "\n";
     std::cout << std::left << std::setw(20) << "Implementation"
               << std::setw(20) << "Mean Timing (ms)"
@@ -247,6 +278,12 @@ int bench_dot() {
               << std::setw(20) << stdTimingSIMD / 1000
               << std::setw(20) << meanErrorSIMD
               << std::setw(20) << stdErrorSIMD << "\n";
+
+    std::cout << std::setw(20) << "SIMD Neon float32"
+              << std::setw(20) << meanTimingSIMDNeon / 1000
+              << std::setw(20) << stdTimingSIMDNeon / 1000
+              << std::setw(20) << meanErrorSIMDNeon
+              << std::setw(20) << stdErrorSIMDNeon << "\n";
 
     std::cout << std::setw(20) << "GGML float32"
               << std::setw(20) << meanTimingGGML32 / 1000
@@ -269,7 +306,7 @@ int bench_dot() {
 }
 
 int main() {
-    //bench_conv1d();
-    bench_dot();
+    bench_conv1d();
+    //bench_dot();
     return 0;
 }

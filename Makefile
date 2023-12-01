@@ -12,7 +12,10 @@ clean:
 tests: build
 	./build/tests
 
+bench-simd: build
+	./build/bench-simd
+
 bench: build
-	./build/bench
+	./build/bench --benchmark_time_unit=ms
 
 .PHONY: all build run clean bench

@@ -331,6 +331,9 @@ template<class T> struct ggml_tensor* set_inplace_impl(struct ggml_context* ctx,
     ASSERT(start0 + values->ne[0] <= tensor->ne[0], "Invalid start0 index");
     ASSERT(start1 + values->ne[1] <= tensor->ne[1], "Invalid start1 index");
     ASSERT(start2 + values->ne[2] <= tensor->ne[2], "Invalid start2 index");
+    ASSERT(ggml_is_contiguous(tensor), "Input tensor should be contiguous");
+    ASSERT(ggml_is_contiguous(values), "Values tensor should be contiguous");
+
     //USE MEMCPY HERE
     ggml_custom2_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * src0, const struct ggml_tensor * src1, int ith, int nth, void * userdata) {
         START_BENCH()
@@ -346,6 +349,19 @@ template<class T> struct ggml_tensor* set_inplace_impl(struct ggml_context* ctx,
             auto dst_idx = (idx_offset_b + i * dst->nb[0] + j * dst->nb[1] + k * dst->nb[2]) / size;
             dst_ptr[dst_idx] = src1_ptr[idx1];
         });
+        /*
+         auto total_elements = ggml_nelements(dst);
+        auto part_size = total_elements / nth;
+        auto offset = part_size * ith;
+        for (size_t w = offset; w < offset + part_size; w++) {
+            int i = 0, j = 0, k = 0;
+            compute_indices(dst, w, i, j, k);
+
+            ASSERT(i < dst->ne[0] && j < dst->ne[1] && k < dst->ne[2], "Invalid index");
+
+            callback(i, j, k);
+        }
+         * */
         PRINT_BENCH("set_inplace")
     };
     return ggml_map_custom2_inplace(
@@ -519,18 +535,152 @@ struct ggml_tensor* conv_1d_inplace_impl_fp16(struct ggml_context* ctx, struct g
     return ggml_map_custom1_inplace(ctx, result, cleanup_func, 1, storage);
 }
 /*
-void leaky_relu_sse(const float* src, float* dst, float slope, size_t n) {
-    __m128 slope_vec = _mm_set1_ps(slope); // Broadcast slope to all four elements
-    __m128 zero_vec = _mm_setzero_ps(); // Zero vector for comparison
-    for (size_t i = 0; i < n; i += 4) {
-        __m128 src_vec = _mm_loadu_ps(&src[i]); // Load 4 floats from source
-        __m128 mask = _mm_cmpgt_ps(src_vec, zero_vec); // Compare src_vec > 0
-        __m128 src_slope_vec = _mm_mul_ps(src_vec, slope_vec); // Multiply src_vec by slope
-        __m128 result_vec = _mm_or_ps(_mm_and_ps(mask, src_vec), _mm_andnot_ps(mask, src_slope_vec));
-        // Store result in destination
-        _mm_storeu_ps(&dst[i], result_vec);
+<3, 1 256>
+<3, 3, 256>
+<3, 5, 256>
+
+<7, 1, 256>
+<7, 1, 256>
+<7, 1, 256>
+
+<11, 1, 256>
+<11, 1, 256>
+<11, 1, 256>
+
+<3, 1 128>
+<3, 3, 128>
+<3, 5, 128>
+
+<7, 1, 128>
+<7, 3, 128>
+<7, 5, 128>
+
+<11, 1, 128>
+<11, 3, 128>
+<11, 5, 128>
+*/
+
+#include <arm_neon.h>
+
+
+void im2col_multi_channel(float * dst_data, const float* src_data, int num_channels, int input_length, int output_length, int kernel_size, int stride, int padding, int dilation, int ith, int nth) {
+    // Precompute constants that are invariant across the inner loops
+    int stride_times_dilation = stride * dilation;
+    int part_size = output_length / nth;
+    int offset = ith * part_size;
+    int lane = 4;
+
+#pragma clang loop vectorize(enable)
+    for (int i = offset; i < offset + part_size; ++i) {
+        for (int j = 0; j < kernel_size; ++j) {
+#pragma unroll
+            for (int c = 0; c < num_channels; c += lane) {
+                int channel_base_index = c * input_length;
+                int channel_end_index = channel_base_index + input_length;
+                int dilation_offset = j * dilation - padding;
+
+                int src_index = channel_base_index + i * stride_times_dilation + dilation_offset;
+                int dst_index = (i * kernel_size + j) * num_channels + c; // Adjusted for transposition
+
+                // Check bounds only once per loop iteration
+                if (src_index >= channel_base_index && src_index < channel_end_index) {
+                    dst_data[dst_index] = src_data[src_index];
+                    //float32x4_t input_data = vld1q_f32(src_data + src_index);
+                    //vst1q_f32(dst_data + dst_index, input_data);
+                }
+            }
+        }
     }
-}*/
+}
+
+struct ggml_tensor* im2col_impl(struct ggml_context* ctx, struct ggml_tensor* weights, struct ggml_tensor* inputs, int stride = 1, int padding = 0, int dilation= 1) {
+    int32_t kernel_size = weights->ne[0];
+    int32_t w_in_channels = weights->ne[1];
+    int32_t out_channels = weights->ne[2];
+
+    int32_t in_length = inputs->ne[0];
+    int32_t i_in_channels = inputs->ne[1];
+    int32_t batch_size = inputs->ne[2];
+
+    int32_t output_columns = ((in_length + 2 * padding - dilation * (kernel_size - 1) - 1) / stride) + 1;
+    auto dst = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, i_in_channels * kernel_size, output_columns, 1, 1);
+    memset(dst->data, 0, ggml_nbytes(dst));
+
+    //printf("Conv1d with kernel_size = %d, dilation = %d, padding = %d, channels = %d \n", kernel_size, dilation, padding, i_in_channels);
+
+    auto func = [](struct ggml_tensor* dst, const struct ggml_tensor* _, const struct ggml_tensor* inputs, int ith, int nth, void* userdata) {
+        auto dst_ptr = (float*)dst->data;
+        auto inputs_ptr = (float*)inputs->data;
+        auto storage = get_temp_data<int32_t>(userdata);
+        auto stride = storage[0];
+        auto padding = storage[1];
+        auto dilation = storage[2];
+        auto output_columns = storage[3];
+        auto kernel_size = storage[4];
+        auto in_length = storage[5];
+        auto channel_count = storage[6];
+
+        im2col_multi_channel(dst_ptr, inputs_ptr, channel_count, in_length, output_columns, kernel_size, stride, padding, dilation, ith, nth);
+    };
+
+    auto result = ggml_map_custom2_inplace(
+            ctx,
+            dst,
+            inputs,
+            func,
+            GGML_N_TASKS_MAX,
+            allocate_temp_i32_array(ctx, {stride, padding, dilation, output_columns, kernel_size, in_length, w_in_channels})
+    );
+    return result;
+}
+
+struct ggml_tensor* conv1d_impl(struct ggml_context* ctx, struct ggml_tensor* weights, struct ggml_tensor* inputs, int stride = 1, int padding = 0, int dilation= 1) {
+    ASSERT(weights->type == GGML_TYPE_F32, "conv1d: only support f16 tensors");
+    ASSERT(inputs->type == GGML_TYPE_F32, "conv1d: only support f32 tensors");
+
+    struct ggml_tensor * im2col = ggml_im2col_1d(ctx, weights, inputs, stride, padding, dilation);
+    auto ic_by_k = (weights->ne[0] * weights->ne[1]);
+
+    struct ggml_tensor * result =
+            ggml_mul_mat(ctx,
+                         ggml_view_2d(ctx, im2col, im2col->ne[0], (im2col->ne[2] * im2col->ne[1]), ggml_element_size(im2col) * im2col->ne[0], 0), // [N, OL, IC * K] => [N*OL, IC * K]
+                         ggml_view_2d(ctx, weights, ic_by_k, weights->ne[2], ic_by_k * ggml_element_size(im2col), 0)); // [OC，IC, K] => [OC, IC * K]
+
+    // ggml_element_size(im2col) * im2col->ne[1], ggml_element_size(im2col) * im2col->ne[1] * weights->ne[2], 0
+    return ggml_reshape_3d(ctx, result, im2col->ne[1], weights->ne[2], im2col->ne[2]); // [N, OC, OL]
+}
+
+void add_fast(float * dst_data, const float* src0_data, const float* src1_data, size_t n, int ith, int nth) {
+    int part_size = n / nth;
+    int offset = ith * part_size;
+    #pragma clang loop vectorize(enable)
+    for (int i = offset; i < offset + part_size; i++) {
+        dst_data[i] = src0_data[i] + src1_data[i];
+    }
+}
+
+struct ggml_tensor* add_impl(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* bias) {
+    ASSERT(bias->type == GGML_TYPE_F32, "add: only support f32 tensors");
+    ASSERT(inputs->type == GGML_TYPE_F32, "add: only support f32 tensors");
+    ASSERT(ggml_nelements(inputs) == ggml_nelements(bias), "add: should have same elements");
+
+    auto func = [](struct ggml_tensor* dst, const struct ggml_tensor* src0, const struct ggml_tensor* src1, int ith, int nth, void* userdata) {
+        auto dst_ptr = (float*)dst->data;
+        auto src0_ptr = (float*)src0->data;
+        auto src1_ptr = (float*)src1->data;
+        add_fast(dst_ptr, src0_ptr, src1_ptr, ggml_nelements(dst), ith, nth);
+    };
+
+    return ggml_map_custom2(
+            ctx,
+            inputs,
+            bias,
+            func,
+            GGML_N_TASKS_MAX,
+            nullptr
+    );
+}
+
 
 struct ggml_tensor* broadcast_if_possible(struct ggml_context* ctx, struct ggml_tensor* tensor, struct ggml_tensor* mask) {
     if (mask->ne[0] == tensor->ne[1] && mask->ne[1] == 1) {
@@ -716,6 +866,14 @@ struct ggml_tensor* tensor_add_bias_inplace(struct ggml_context* ctx, struct ggm
 
 struct ggml_tensor* tensor_conv_1d_inplace(struct ggml_context* ctx,  struct ggml_tensor* inputs, struct ggml_tensor* weights, int stride = 1, int padding = 0, int dilation= 1) {
     return conv_1d_inplace_impl_fp16(ctx, inputs, weights, stride, padding, dilation);
+}
+
+struct ggml_tensor* tensor_conv_1d(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* weights,  int stride = 1, int padding = 0, int dilation= 1) {
+    return conv1d_impl(ctx, weights, inputs, stride, padding, dilation);
+}
+
+struct ggml_tensor* tensor_add_fast(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* bias) {
+    return add_impl(ctx, inputs, bias);
 }
 
 struct ggml_tensor* tensor_expand(struct ggml_context* ctx, struct ggml_tensor* tensor, int stride, int dim) {

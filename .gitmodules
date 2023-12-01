@@ -4,3 +4,6 @@
 [submodule "highway"]
 	path = highway
 	url = https://github.com/google/highway.git
+[submodule "benchmark"]
+	path = benchmark
+	url = https://github.com/google/benchmark.git
