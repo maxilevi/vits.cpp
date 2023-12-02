@@ -32,7 +32,7 @@ private:
     std::string load_param(const std::string& key);
     template<typename T>
     std::vector<T> load_vector(const std::string& key) {
-        printf("Loading vector %s\n", key.c_str());
+        this->log("Loading vector %s\n", key.c_str());
         std::string serialized_data = this->load_param(key); // Assuming this->load_param is defined somewhere in your code
         return load_vector_impl<T>(serialized_data);
     };

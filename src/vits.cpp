@@ -133,7 +133,7 @@ struct ggml_tensor* linear_with_bias(struct ggml_context* ctx, struct ggml_tenso
 
 struct ggml_tensor* conv1d(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, int stride = 1, int padding = 0, int dilation= 1) {
     ASSERT(input->n_dims == 3, "Conv only supported on 3d tensors");
-    return ggml_conv_1d(ctx, proj_weights, input, stride, padding, dilation);
+    return tensor_conv_1d(ctx, input, proj_weights, stride, padding, dilation);
 }
 
 struct ggml_tensor* depthwise_conv_with_bias(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, struct ggml_tensor* proj_bias, int stride = 1, int padding = 0, int dilation= 1) {
@@ -174,7 +174,7 @@ struct ggml_tensor* conv_transpose_1d_with_bias(struct ggml_context* ctx, struct
     auto batch_size = input->ne[2];
     ASSERT(batch_size == 1, "Batch size must be 1");
 
-    printf("Conv1DTranspose kernel_size = %d, stride = %d, padding = %d, dilation = %d\n", kernel_size, stride, padding, dilation);
+    //printf("Conv1DTranspose kernel_size = %d, stride = %d, padding = %d, dilation = %d\n", kernel_size, stride, padding, dilation);
     padding = 0;
     auto result = ggml_conv_transpose_1d(ctx, proj_weights, input, stride, padding, dilation);
     result = ggml_view_3d(ctx, result, result->ne[0], result->ne[1], result->ne[2], result->nb[1], result->nb[2], 0);
@@ -986,7 +986,7 @@ struct ggml_cgraph* vits_model::build_graph_part_one(struct ggml_context* ctx, s
     this->predicted_lengths_output = tensor_max(ctx, predicted_lengths);
     this->cum_duration_output = tensor_per_row_cumsum(ctx, duration);
 
-    struct ggml_cgraph* gf = ggml_new_graph_custom(ctx, pow(2, 15), false);
+    struct ggml_cgraph* gf = ggml_new_graph_custom(ctx, pow(2, 16), false);
 
     ggml_build_forward_expand(gf, this->text_encoder_output);
     ggml_build_forward_expand(gf, this->cum_duration_output);

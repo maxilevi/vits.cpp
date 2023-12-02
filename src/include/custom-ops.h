@@ -643,8 +643,8 @@ struct ggml_tensor* im2col_impl(struct ggml_context* ctx, struct ggml_tensor* we
             userdata
     );
     result = cleanup(ctx, result, userdata);
-    //result = ggml_permute(ctx, result, 1, 0, 2, 3);
-    //result = ggml_cont(ctx, result);
+    result = ggml_permute(ctx, result, 1, 0, 2, 3);
+    result = ggml_cont(ctx, result);
     return result;
 }
 
