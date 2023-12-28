@@ -10,6 +10,7 @@
 #include <sstream>
 #include <ggml/ggml-alloc.h>
 #include "vits_model_data.h"
+#include "ggml-util.h"
 
 typedef struct ggml_tensor * tensor_t;
 

@@ -61,7 +61,7 @@ bool write_wav(std::string path, float* samples, size_t size) {
     std::cout << "WAV file '" << path << "' has been written" << std::endl;
     return true;
 }
-const char* notting_hill = "Hola, cómo estas? Hola, cómo estas? Hola, cómo estas? Hola, cómo estas?";
+const char* notting_hill = "Cada amanecer trae consigo nuevas oportunidades para crecer y aprender.";
 
 
 int main(int argc, char ** argv) {

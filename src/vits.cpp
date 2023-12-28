@@ -1,7 +1,6 @@
 #include "include/vits.h"
 #include <ggml/ggml-alloc.h>
 #include "include/debug.h"
-#include "include/ggml-util.h"
 #include <memory>
 #include <thread>
 #include <algorithm>
@@ -133,7 +132,9 @@ struct ggml_tensor* linear_with_bias(struct ggml_context* ctx, struct ggml_tenso
 
 struct ggml_tensor* conv1d(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, int stride = 1, int padding = 0, int dilation= 1) {
     ASSERT(input->n_dims == 3, "Conv only supported on 3d tensors");
+    //auto proj_weights_fp16 = cast_tensor(ctx, proj_weights, GGML_TYPE_F16);
     return tensor_conv_1d(ctx, input, proj_weights, stride, padding, dilation);
+    //return ggml_conv_1d(ctx, proj_weights_fp16, input, stride, padding, dilation);
 }
 
 struct ggml_tensor* depthwise_conv_with_bias(struct ggml_context* ctx, struct ggml_tensor* input, struct ggml_tensor* proj_weights, struct ggml_tensor* proj_bias, int stride = 1, int padding = 0, int dilation= 1) {
@@ -572,12 +573,12 @@ struct ggml_tensor* vits_model::hifigan_residual_block_graph(struct ggml_context
 
 struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor * spectogram, struct ggml_tensor* global_conditioning) {
     auto _ = model->use("decoder");
-    auto upsample_rates = this->load_vector<int>("upsample_rates");
+    std::vector<int> upsample_rates = this->load_vector<int>("upsample_rates");
     auto upsample_kernel_sizes = this->load_vector<int>("upsample_kernel_sizes");
     auto num_upsamples = upsample_rates.size();
     auto kernel_sizes = this->load_vector<int>("resblock_kernel_sizes");
     auto num_kernels = kernel_sizes.size();
-    auto dilations = this->load_vector<std::vector<int>>("resblock_dilation_sizes");
+    std::vector<std::vector<int>> dilations = this->load_vector<std::vector<int>>("resblock_dilation_sizes");
     auto leaky_relu_slope = this->load_float("leaky_relu_slope");
     std::vector<std::tuple<int, std::vector<int>, double>> all_params;
 
@@ -996,7 +997,6 @@ struct ggml_cgraph* vits_model::build_graph_part_one(struct ggml_context* ctx, s
     ggml_build_forward_expand(gf, this->predicted_lengths_output);
 
     if (this->debug_tensor != nullptr) {
-        //printf("debug_tensor %p\n", debug_tensor);
         ggml_build_forward_expand(gf, this->debug_tensor);
     }
 
@@ -1050,22 +1050,16 @@ struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, s
     prior_latents = reshape_3d(ctx, prior_latents, prior_latents->ne[0], prior_latents->ne[1], 1);
     auto latents = this->flow_graph(ctx, allocr, prior_latents, speaker_embeddings, true);
     this->latents_output = latents;
-
-    //ASSERT_SHAPE(this->latents_output, 93, 192, 1, 0);
-
-
     this->waveform = this->hifigan_graph(ctx, allocr, latents, speaker_embeddings);
-    SHAPE(this->waveform)
-    //ASSERT_SHAPE(this->waveform, 23808, 1, 1, 1);
 
     struct ggml_cgraph* gf = ggml_new_graph_custom(ctx, 4096, false);
-    ggml_build_forward_expand(gf, this->latents_output);
     ggml_build_forward_expand(gf, this->waveform);
 
     if (this->debug_tensor != nullptr)
         ggml_build_forward_expand(gf, this->debug_tensor);
 
-    this->log("Finished building graph\n");
+    this->log("Finished building graph two, took %d milliseconds\n", delta);
+
 
     return gf;
 }
@@ -1077,7 +1071,6 @@ void vits_model::execute_graph(struct ggml_context* ctx, struct ggml_cgraph* gra
     if (plan.work_size > 0) {
         plan.work_data = (uint8_t*) malloc(plan.work_size);
     }
-    PRINT_MEM(ctx)
     printf("Computing with %f mb ...\n", plan.work_size / MEGABYTE);
     auto start = std::chrono::high_resolution_clock::now();
     ggml_graph_compute(graph, &plan);
@@ -1087,11 +1080,10 @@ void vits_model::execute_graph(struct ggml_context* ctx, struct ggml_cgraph* gra
 #ifdef GGML_PERF
     //ggml_graph_print(graph);
 #endif
-    printf("Computation took %lld milliseconds\n", delta);
+    log("Computation took %lld milliseconds\n", delta);
 }
 
 std::vector<float> vits_model::process(std::string text) {
-    // tokenize phonemes false
 #if VITS_DEBUG
     auto debug_mode = true;
 #else
@@ -1099,26 +1091,24 @@ std::vector<float> vits_model::process(std::string text) {
 #endif
     struct ggml_context * shared_ctx = ggml_init({.mem_size   = (size_t)64 * MEGABYTE, .mem_buffer = nullptr});
 
-    std::vector<int32_t> input_ids;
-    if (debug_mode) {
-        input_ids = {0, 19, 0, 39, 0, 35, 0, 35, 0, 41, 0, 27, 0, 41, 0, 43, 0, 35, 0, 29, 0};
-    } else {
-        input_ids = model->tokenizer->tokenize(text);
-    }
+    std::vector<int32_t> input_ids = model->tokenizer->tokenize(text);
     auto input_ids_tensor = ggml_new_tensor_1d(shared_ctx, GGML_TYPE_I32, input_ids.size());
     memcpy(input_ids_tensor->data, input_ids.data(), ggml_element_size(input_ids_tensor) * input_ids.size());
 
     struct ggml_tensor* speaker_embeddings = nullptr;
 
     struct ggml_context * graph_one_ctx = ggml_init({.mem_size   = (size_t)128 * MEGABYTE, .mem_buffer = nullptr});
-    auto graph_one = this->build_graph_part_one(graph_one_ctx, input_ids_tensor, speaker_embeddings);
-    //ggml_graph_dump_dot(graph_one, nullptr, "graph_one.dot");
-    printf("Executing graph one\n");
-    printf("Graph of nodes %d\n", graph_one->n_nodes);
-    auto delta = 0;
+
     auto start = std::chrono::high_resolution_clock::now();
+    auto delta = 0;
+    auto graph_one = this->build_graph_part_one(graph_one_ctx, input_ids_tensor, speaker_embeddings);
+    delta += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
+    printf("Building graph one took %d milliseconds\n", delta);
+
+    start = std::chrono::high_resolution_clock::now();
     this->execute_graph(graph_one_ctx, graph_one);
     delta += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
+
     if (this->debug_tensor != nullptr)
         PRINT_TENSOR2(this->debug_tensor);
 

@@ -67,6 +67,7 @@ std::vector<int32_t> vits_tokenizer::tokenize_fast(const std::string& input_stri
             i++;
         }
     }
+    printf("Tokenized text: '%s'\n", input_string.c_str());
     return tokens;
 }
 
@@ -108,7 +109,6 @@ std::string vits_tokenizer::prepare_for_tokenization(const std::string& text, bo
                 }), processed_text.end()
         );*/
     }
-
     return {processed_text, {}};
 }
 

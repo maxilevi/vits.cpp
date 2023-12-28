@@ -1,14 +1,16 @@
 #include <benchmark/benchmark.h>
-#include <ggml/ggml.h>
 #include <random>
-#include <ggml-util.h>
+#include <vits.h>
 
 using namespace benchmark;
 
+vits_model* model = nullptr;
 struct ggml_context *ctx;
-struct ggml_tensor *cur_fp32, *filters_fp32, *cur, *filters;
+struct ggml_tensor *cur_fp32, *filters_fp32, *cur, *filters, *colA, *colB, *colA_fp32, *colB_fp32;
 
 static void GlobalSetup() {
+    model = vits_model_load_from_file("/Users/maximilianolevi/Documents/Repositories/vits.cpp/scripts/vits-spanish.ggml");
+
     struct ggml_init_params params = {
             .mem_size   = (size_t)256*1024*1024,
             .mem_buffer = nullptr,
@@ -37,10 +39,30 @@ static void GlobalSetup() {
 
     filters = ggml_new_tensor(ctx, GGML_TYPE_F16, filters_fp32->n_dims, filters_fp32->ne);
     ggml_fp32_to_fp16_row((float*)filters_fp32->data, (ggml_fp16_t*)filters->data, ggml_nelements(filters_fp32));
+
+    // cols
+
+    colA_fp32 = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 8000, 768, 1);
+    for (int i = 0; i < ggml_nelements(cur_fp32); ++i) {
+        ((float*) colA_fp32->data)[i] = dis(gen);
+    }
+
+    colB_fp32 = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 8000, 1200, 1);
+    for (int i = 0; i < ggml_nelements(filters_fp32); ++i) {
+        ((float*) colB_fp32->data)[i] = dis(gen);
+    }
+
+    // Convert to other formats if necessary
+    colA = ggml_new_tensor(ctx, GGML_TYPE_F16, colA_fp32->n_dims, colA_fp32->ne);
+    ggml_fp32_to_fp16_row((float*)colA_fp32->data, (ggml_fp16_t*)colA->data, ggml_nelements(colA));
+
+    colB = ggml_new_tensor(ctx, GGML_TYPE_F16, colB_fp32->n_dims, colB_fp32->ne);
+    ggml_fp32_to_fp16_row((float*)colB_fp32->data, (ggml_fp16_t*)colB->data, ggml_nelements(colB_fp32));
 }
 
 static void GlobalCleanup() {
     ggml_free(ctx);
+    vits_free_model(model);
 }
 
 struct ggml_tensor* execute_tensor(
@@ -58,7 +80,7 @@ struct ggml_tensor* execute_tensor(
     ggml_graph_compute(graph, &plan);
     return tensor;
 }
-
+/*
 static void BM_tensor_conv_1d(State& state) {
     for (auto _ : state) {
         struct ggml_init_params params = {
@@ -85,6 +107,17 @@ static void BM_ggml_conv_1d(State& state) {
     }
 }
 BENCHMARK(BM_ggml_conv_1d);
+
+static void BM_tensor_conv_1d_inplace(State& state) {
+    for (auto _ : state) {
+        auto ctx2 = ggml_init({.mem_size   = (size_t)16*1024*1024*1024,});
+        auto result = tensor_conv_1d_inplace(ctx2, cur, filters, 1, 1, 1);
+        result = execute_tensor(ctx2, result);
+        benchmark::DoNotOptimize(result);
+        ggml_free(ctx2);
+    }
+}
+BENCHMARK(BM_tensor_conv_1d_inplace);
 
 static void BM_im2col_impl(State& state) {
     for (auto _ : state) {
@@ -141,6 +174,39 @@ static void BM_ggml_im2col(State& state) {
     }
 }
 BENCHMARK(BM_ggml_im2col);
+
+static void BM_ggml_mul_mat_fp16(State& state) {
+    for (auto _ : state) {
+        auto ctx2 = ggml_init({.mem_size   = (size_t)16*1024*1024*1024,});
+        auto result = ggml_mul_mat(ctx2, colA, colB);
+        result = execute_tensor(ctx2, result);
+        benchmark::DoNotOptimize(result);
+        ggml_free(ctx2);
+    }
+}
+BENCHMARK(BM_ggml_mul_mat_fp16);
+
+static void BM_ggml_mul_mat_fp32(State& state) {
+    for (auto _ : state) {
+        auto ctx2 = ggml_init({.mem_size   = (size_t)16*1024*1024*1024,});
+        auto result = ggml_mul_mat(ctx2, colA_fp32, colB_fp32);
+        result = execute_tensor(ctx2, result);
+        benchmark::DoNotOptimize(result);
+        ggml_free(ctx2);
+    }
+}
+BENCHMARK(BM_ggml_mul_mat_fp32);
+*/
+static const char* phrase = "Cada amanecer trae consigo nuevas oportunidades para crecer y aprender.";
+
+static void BM_vits_model_process(State& state) {
+    for (auto _ : state) {
+        auto result = vits_model_process(model, phrase);
+        benchmark::DoNotOptimize(result);
+        vits_free_result(result);
+    }
+}
+BENCHMARK(BM_vits_model_process);
 
 int main(int argc, char** argv) {
     GlobalSetup();

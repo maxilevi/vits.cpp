@@ -441,7 +441,9 @@ void execute_conv1d_fp16(struct ggml_tensor * dst, const struct ggml_tensor * in
 
     auto kernel_size = weights->ne[0];
     auto in_length = inputs->ne[0];
-    auto channel_count = inputs->ne[1];
+    auto output_channels = inputs->ne[1];
+    auto input_channels = weights->ne[0];
+    printf("input channel %d, output channel %d\n", input_channels, output_channels);
 
     ASSERT(dst_ptr == src0_ptr, "dst and src0 should be same tensors");
     ASSERT(batch_size == 1, "Only batch size 1 supported");
@@ -453,41 +455,52 @@ void execute_conv1d_fp16(struct ggml_tensor * dst, const struct ggml_tensor * in
     const int max_channel_count = 768;
     const int max_buffer_size = max_channel_count * max_kernel_size;
     ASSERT(kernel_size <= max_kernel_size, "Kernel size too big");
-    ASSERT(channel_count <= max_buffer_size, "Channel count too big");
+    ASSERT(output_channels <= max_buffer_size, "Channel count too big");
 
     ggml_fp16_t input_buffer[max_buffer_size];
     ggml_fp16_t kernel_buffer[max_buffer_size];
-    auto start = std::chrono::high_resolution_clock::now();
-//    printf("conv1d stride: %d channels: %d, kernel_size: %d, in_+length %d\n", stride, channel_count, kernel_size, in_length);
+    auto part_size = output_size / nth;
+    auto offset = part_size * ith;
+    // auto start = std::chrono::high_resolution_clock::now();
+    printf("conv1d stride: %d channels: %d, kernel_size: %d, in_+length %d output_size %d\n", stride, output_channels, kernel_size, in_length, output_size);
     size_t w = 0;
-    for (int co = 0; co < channel_count; ++co) {
-        for (int i = 0; i < output_size; i++) {
-            float sum = 0;
-            int n = 0;
-            for (int ci = 0; ci < channel_count; ++ci) {
-                for (int j = 0; j < kernel_size; j += dilation) {
-                    auto input_index = i - padding + j;
+    auto input_stride1 = inputs->nb[1] / input_size;
+    auto weight_stride1 = weights->nb[1] / weights_size;
+    auto weight_stride2 = weights->nb[2] / weights_size;
+        for (int co = 0; co < output_channels; ++co) {
+            for (int ci = 0; ci < input_channels; ++ci) {
+                auto partial_weight_idx = ci * weight_stride1 + co * weight_stride2;
+                for (int i = offset; i < offset + part_size; i++) {
+                    size_t n = 0;
+                    float sum = 0;
+                    for (int j = 0; j < kernel_size; j += dilation) {
+                        auto input_index = j - padding + i;
 
-                    if (0 <= input_index && input_index < in_length) {
-                        auto input_tensor_idx = (input_index * inputs->nb[0] + ci * inputs->nb[1]) / input_size;
-                        auto weights_idx = (j * weights->nb[0] + ci * weights->nb[1] + co * weights->nb[2]) / weights_size;
+                        //if (0 <= input_index && input_index < in_length) {
+                            auto input_tensor_idx = ci * input_stride1 + input_index;
+                            auto src = src0_ptr[input_tensor_idx];
 
-                        sum += src0_ptr[input_tensor_idx] * weights_ptr[weights_idx];
-                        input_buffer[n] = src0_ptr[input_tensor_idx];
-                        kernel_buffer[n] = weights_ptr[weights_idx];
-                        n++;
-                        w++;
+                            auto weights_idx = partial_weight_idx + j;
+                            auto weight = weights_ptr[weights_idx];
+
+                            sum += weight * src;
+                            /*input_buffer[n] = src;
+                            kernel_buffer[n] = weight;
+                            n++;
+                            w++;*/
+                        //}
                     }
+                    auto output_idx = i + co * weight_stride2;
+                    //float sum = 0;
+                    //traits.vec_dot(n, &sum, input_buffer, kernel_buffer);
+                    work_data_ptr[output_idx] = sum;
                 }
             }
-            traits.vec_dot(n, &sum, input_buffer, kernel_buffer);
-            auto output_idx = (i * dst->nb[0] + co * dst->nb[1]) / work_size;
-            work_data_ptr[output_idx] = (ggml_fp16_t) sum;
         }
-    }
-    auto end = std::chrono::high_resolution_clock::now();
-    auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    printf("Done total: %f million elements. Took %lld ms\n", (w / 1e6), delta);
+
+    //auto end = std::chrono::high_resolution_clock::now();
+    //auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    //printf("Done total: %f million elements. Took %lld ms\n", (w / 1e6), delta);
 };
 
 struct ggml_tensor* conv_1d_inplace_impl_fp16(struct ggml_context* ctx, struct ggml_tensor* inputs, struct ggml_tensor* weights, int stride = 1, int padding = 0, int dilation= 1) {
@@ -528,12 +541,16 @@ struct ggml_tensor* conv_1d_inplace_impl_fp16(struct ggml_context* ctx, struct g
         auto* dst_ptr = (ggml_fp16_t*)dst->data;
         auto* src_ptr = (ggml_fp16_t*)src->data;
         ASSERT(src_ptr == dst_ptr, "src and dst should be same tensors");
+        ASSERT(ggml_is_contiguous(src), "Only continous tensors supports");
         auto work_data = (ggml_fp16_t*) userdata;
-        auto work_size = ggml_element_size(dst);
-        for_each_element_threaded(dst, ith, nth, [&](int i, int j, int k) {
-            auto dst_idx = (i * dst->nb[0] + j * dst->nb[1] + k * dst->nb[2]) / work_size;
-            dst_ptr[dst_idx] = work_data[dst_idx];
-        });
+
+        auto total_elements = ggml_nelements(dst);
+        auto part_size = total_elements / nth;
+        auto offset = part_size * ith;
+
+        for (size_t w = offset; w < offset + part_size; w++) {
+            dst_ptr[w] = work_data[w];
+        };
     };
 
     auto result = ggml_map_custom1_inplace(ctx, conv1d_2_work_data, copy_func, 1, work_data);
@@ -649,7 +666,7 @@ struct ggml_tensor* im2col_impl(struct ggml_context* ctx, struct ggml_tensor* we
 }
 
 struct ggml_tensor* conv1d_impl(struct ggml_context* ctx, struct ggml_tensor* weights, struct ggml_tensor* inputs, int stride = 1, int padding = 0, int dilation= 1) {
-    ASSERT(weights->type == GGML_TYPE_F32, "conv1d: only support f16 tensors");
+    //ASSERT(weights->type == GGML_TYPE_F32, "conv1d: only support f16 tensors");
     ASSERT(inputs->type == GGML_TYPE_F32, "conv1d: only support f32 tensors");
 
     struct ggml_tensor * im2col = ggml_im2col_1d(ctx, weights, inputs, stride, padding, dilation);

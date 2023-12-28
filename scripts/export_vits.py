@@ -84,8 +84,8 @@ def remove_weight_norm_and_convert_to_fp16(module, full_name=''):
                 print(f"Removed weight norm")
 
             #if not 'resblocks' in full_name:
-            #submodule.weight.data = submodule.weight.data.to(torch.float16)
-            #print(f"Converted {name} weights to float16")
+            submodule.weight.data = submodule.weight.data.to(torch.float16)
+            print(f"Converted {name} weights to float16")
 
         # Recursively apply to children modules
         remove_weight_norm_and_convert_to_fp16(submodule, full_name + '.' + name)

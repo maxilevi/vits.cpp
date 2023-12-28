@@ -39,7 +39,7 @@ do { \
         if (dim1) expected_shape.push_back(dim1);              \
         if (dim2) expected_shape.push_back(dim2);              \
         if (dim3) expected_shape.push_back(dim3);              \
-        printf("Assert shape (");                    \
+        /*printf("Assert shape (");                    \
         for (int i = 0; i < tensor->n_dims; ++i) { \
             printf("%d", tensor->ne[i]); \
             if (i != tensor->n_dims - 1) printf(", "); \
@@ -49,7 +49,7 @@ do { \
             printf("%lld", expected_shape[i]); \
             if (i != tensor->n_dims - 1) printf(", "); \
         } \
-        printf(")\n");                                   \
+        printf(")\n");*/                                   \
         ASSERT(tensor->n_dims == expected_shape.size(), "Shape len mismatch"); \
         for (int i = 0; i < tensor->n_dims; ++i) { \
             ASSERT(tensor->ne[i] == expected_shape[i], "Shape mismatch"); \
