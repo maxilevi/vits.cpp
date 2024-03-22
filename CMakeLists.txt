@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.0)
+cmake_minimum_required(VERSION 3.5)
 project(vits VERSION 0.1.0)
 
 set(CMAKE_C_STANDARD   20)
@@ -20,7 +20,7 @@ add_library(vits src/vits.cpp src/vits_model_data.cpp
         src/vits_tokenizer.cpp)
 target_include_directories(vits PRIVATE ggml/include)
 
-target_link_libraries(vits PRIVATE ggml)
+target_link_libraries(vits PUBLIC ggml)
 
 add_executable(main test/main.cpp
         src/include/vits_tokenizer.h

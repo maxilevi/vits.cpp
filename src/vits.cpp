@@ -285,7 +285,7 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
             int src_len = key->ne[1];
 
             // Scaling the query_states (Assuming `scaling` is a float or double type variable you have)
-            float scaling = pow(head_dim, -0.5);
+            float scaling = pow((double) head_dim, -0.5);
             query = ggml_scale(ctx, query, ggml_new_f32(ctx, scaling));
 
             auto query_states = shape_attn(ctx, query, head_dim, num_heads, tgt_len);
@@ -1055,11 +1055,7 @@ struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, s
     struct ggml_cgraph* gf = ggml_new_graph_custom(ctx, 4096, false);
     ggml_build_forward_expand(gf, this->waveform);
 
-    if (this->debug_tensor != nullptr)
-        ggml_build_forward_expand(gf, this->debug_tensor);
-
-    this->log("Finished building graph two, took %d milliseconds\n", delta);
-
+    if (this->debug_tensor != nullptr) ggml_build_forward_expand(gf, this->debug_tensor);
 
     return gf;
 }

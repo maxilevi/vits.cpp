@@ -673,7 +673,7 @@ struct ggml_tensor* conv1d_impl(struct ggml_context* ctx, struct ggml_tensor* we
     //ASSERT(weights->type == GGML_TYPE_F32, "conv1d: only support f16 tensors");
     ASSERT(inputs->type == GGML_TYPE_F32, "conv1d: only support f32 tensors");
 
-    struct ggml_tensor * im2col = ggml_im2col_1d(ctx, weights, inputs, stride, padding, dilation);
+    struct ggml_tensor * im2col = ggml_im2col(ctx, weights, inputs, stride, 0, padding, 0, dilation, 0, false);
     auto ic_by_k = (weights->ne[0] * weights->ne[1]);
 
     struct ggml_tensor * result =
