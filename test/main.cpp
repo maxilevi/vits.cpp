@@ -61,11 +61,11 @@ bool write_wav(std::string path, float* samples, size_t size) {
     std::cout << "WAV file '" << path << "' has been written" << std::endl;
     return true;
 }
-const char* notting_hill = "Cada amanecer trae consigo nuevas oportunidades para crecer y aprender.";
+const char* notting_hill = "Hello world! I am an VITs voice model trained by facebook.";
 
 
 int main(int argc, char ** argv) {
-    vits_model * model = vits_model_load_from_file("/Users/maximilianolevi/Documents/Repositories/vits.cpp/scripts/vits-spanish.ggml");
+    vits_model * model = vits_model_load_from_file("/home/danemadsen/vits.cpp/scripts/vits-english.ggml");
     assert(model != nullptr);
 
     auto result = vits_model_process(model, notting_hill);
