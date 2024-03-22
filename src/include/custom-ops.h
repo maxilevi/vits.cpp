@@ -2,6 +2,12 @@
 // Created by Maximiliano Levi on 11/19/23.
 //
 
+#include <cstring>
+#include <functional>
+#include <cmath>
+#include <cstdarg>
+#include <iomanip>
+
 #ifndef VITS_CUSTOM_OPS_H
 #define VITS_CUSTOM_OPS_H
 
@@ -589,8 +595,6 @@ struct ggml_tensor* conv_1d_inplace_impl_fp16(struct ggml_context* ctx, struct g
 <11, 3, 128>
 <11, 5, 128>
 */
-
-#include <arm_neon.h>
 
 
 void im2col_multi_channel(float * dst_data, const float* src_data, int num_channels, int input_length, int output_length, int kernel_size, int stride, int padding, int dilation, int ith, int nth) {

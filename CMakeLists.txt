@@ -14,9 +14,7 @@ else()
     add_link_options(-O3 -march=native -flto -fno-omit-frame-pointer)
 endif()
 
-#message("CMAKE_C_FLAGS_RELEASE: ${CMAKE_CXX_FLAGS_RELEASE}")
 add_subdirectory(ggml)
-#add_subdirectory(highway)
 
 add_library(vits src/vits.cpp src/vits_model_data.cpp
         src/vits_tokenizer.cpp)
@@ -27,22 +25,6 @@ target_link_libraries(vits PRIVATE ggml)
 add_executable(main test/main.cpp
         src/include/vits_tokenizer.h
         src/include/custom-ops.h
-        test/bench_conv1d.cpp
 )
 target_include_directories(main PRIVATE src/include ggml/include)
 target_link_libraries(main PRIVATE vits)
-
-add_executable(tests test/test_ggml_utils.cpp)
-target_include_directories(tests PRIVATE src/include ggml/include)
-target_link_libraries(tests PRIVATE vits ggml)
-
-add_executable(bench-simd test/bench_simd.cpp)
-target_include_directories(bench-simd PRIVATE src/include ggml/include highway/)
-target_link_libraries(bench-simd PRIVATE vits ggml)
-
-add_executable(bench test/bench.cpp)
-set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable Benchmark Testing")
-set(BENCHMARK_DOWNLOAD_DEPENDENCIES ON CACHE BOOL "Enable downloading of dependencies")
-add_subdirectory(benchmark)
-target_include_directories(bench PRIVATE src/include ggml/include)
-target_link_libraries(bench PRIVATE vits ggml benchmark::benchmark)
