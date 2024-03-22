@@ -2,6 +2,12 @@
 // Created by Maximiliano Levi on 11/19/23.
 //
 
+#include <cstring>
+#include <functional>
+#include <cmath>
+#include <cstdarg>
+#include <iomanip>
+
 #ifndef VITS_CUSTOM_OPS_H
 #define VITS_CUSTOM_OPS_H
 
@@ -590,8 +596,6 @@ struct ggml_tensor* conv_1d_inplace_impl_fp16(struct ggml_context* ctx, struct g
 <11, 5, 128>
 */
 
-#include <arm_neon.h>
-
 
 void im2col_multi_channel(float * dst_data, const float* src_data, int num_channels, int input_length, int output_length, int kernel_size, int stride, int padding, int dilation, int ith, int nth) {
     // Precompute constants that are invariant across the inner loops
@@ -669,7 +673,7 @@ struct ggml_tensor* conv1d_impl(struct ggml_context* ctx, struct ggml_tensor* we
     //ASSERT(weights->type == GGML_TYPE_F32, "conv1d: only support f16 tensors");
     ASSERT(inputs->type == GGML_TYPE_F32, "conv1d: only support f32 tensors");
 
-    struct ggml_tensor * im2col = ggml_im2col_1d(ctx, weights, inputs, stride, padding, dilation);
+    struct ggml_tensor * im2col = ggml_im2col(ctx, weights, inputs, stride, 0, padding, 0, dilation, 0, false);
     auto ic_by_k = (weights->ne[0] * weights->ne[1]);
 
     struct ggml_tensor * result =

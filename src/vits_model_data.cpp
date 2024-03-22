@@ -11,6 +11,7 @@
 #include <utility>
 #include <unordered_set>
 #include <regex>
+#include <cstring>
 
 template<class T> struct ggml_tensor* load_tensor(struct ggml_context* ctx, std::ifstream& file, const std::string& tensor_name, int shape_len, const std::vector<int64_t>& tensor_shape, uint32_t tensor_bytes_len, ggml_type tensor_type) {
     auto tensor = ggml_new_tensor(ctx, tensor_type, shape_len, tensor_shape.data());
