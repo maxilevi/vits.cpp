@@ -28,6 +28,8 @@ struct vits_model_data {
 
     static std::unique_ptr<vits_model_data> from_file(const char* filename, ggml_context* ctx);
 
+    static std::unique_ptr<vits_model_data> from_bytes(const char* bytes, size_t size, ggml_context* ctx);
+
     vits_model_data(std::unordered_map<std::string, ggml_tensor*> tensor_map, std::unordered_map<std::string, std::string> config, std::unique_ptr<vits_tokenizer> tokenizer);
 
     std::unique_ptr<prefix_guard> use(std::string name);

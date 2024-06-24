@@ -8,11 +8,13 @@
 #include "include/common.h"
 #include <fstream>
 #include <stdio.h>
+#include <sstream>
+#include <iostream>
 #include <utility>
 #include <unordered_set>
 #include <regex>
 
-template<class T> struct ggml_tensor* load_tensor(struct ggml_context* ctx, std::ifstream& file, const std::string& tensor_name, int shape_len, const std::vector<int64_t>& tensor_shape, uint32_t tensor_bytes_len, ggml_type tensor_type) {
+template<class T> struct ggml_tensor* load_tensor(struct ggml_context* ctx, std::istream& file, const std::string& tensor_name, int shape_len, const std::vector<int64_t>& tensor_shape, uint32_t tensor_bytes_len, ggml_type tensor_type) {
     auto tensor = ggml_new_tensor(ctx, tensor_type, shape_len, tensor_shape.data());
     ggml_set_name(tensor, tensor_name.c_str());
 
@@ -24,66 +26,61 @@ template<class T> struct ggml_tensor* load_tensor(struct ggml_context* ctx, std:
     return tensor;
 }
 
-std::tuple<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std::string, std::string>, std::unique_ptr<vits_tokenizer>> load_model_from_bytes(const char* filename, ggml_context* ctx) {
+std::tuple<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std::string, std::string>, std::unique_ptr<vits_tokenizer>> load_model_from_stream(std::istream& input_stream, ggml_context* ctx) {
     std::unordered_map<std::string, ggml_tensor*> tensors;
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Error opening file!");
-    }
 
     // Here read tokenizer
-    auto tokenizer = vits_tokenizer::load(file);
+    auto tokenizer = vits_tokenizer::load(input_stream);
 
     // Read config
     std::unordered_map<std::string, std::string> config;
-    uint32_t config_count = read_number(file);
-    for(int i = 0; i < config_count; ++i) {
+    uint32_t config_count = read_number(input_stream);
+    for (uint32_t i = 0; i < config_count; ++i) {
         // Read config key
-        uint32_t key_len = read_number(file);
+        uint32_t key_len = read_number(input_stream);
 
         std::vector<char> key_bytes(key_len);
-        file.read(key_bytes.data(), key_len);
+        input_stream.read(key_bytes.data(), key_len);
         std::string key(key_bytes.begin(), key_bytes.end());
 
         // Read config value
-        uint32_t value_len = read_number(file);
+        uint32_t value_len = read_number(input_stream);
 
         std::vector<char> value_bytes(value_len);
-        file.read(value_bytes.data(), value_len);
+        input_stream.read(value_bytes.data(), value_len);
         std::string value(value_bytes.begin(), value_bytes.end());
 
         config[key] = value;
     }
 
-
-    uint32_t tensor_count = read_number(file);
-    for(int i = 0; i < tensor_count; ++i) {
+    uint32_t tensor_count = read_number(input_stream);
+    for (uint32_t i = 0; i < tensor_count; ++i) {
         // Read tensor name
-        uint32_t name_len = read_number(file);
+        uint32_t name_len = read_number(input_stream);
 
         std::vector<char> name_bytes(name_len);
-        file.read(name_bytes.data(), name_len);
+        input_stream.read(name_bytes.data(), name_len);
         std::string tensor_name(name_bytes.begin(), name_bytes.end());
 
         // Read tensor type
-        auto tensor_type = (ggml_type)read_number(file);
+        auto tensor_type = (ggml_type)read_number(input_stream);
 
         // Read tensor shape
-        uint32_t shape_len = read_number(file);
+        uint32_t shape_len = read_number(input_stream);
         std::vector<int64_t> tensor_shape(GGML_MAX_DIMS, 1);
-        for(int i = 0; i < shape_len; ++i) {
-            uint32_t dim = read_number(file);
-            tensor_shape[i] = (int64_t) dim;
+        for (uint32_t j = 0; j < shape_len; ++j) {
+            uint32_t dim = read_number(input_stream);
+            tensor_shape[j] = (int64_t)dim;
         }
 
-        // Read tensor byte length and load directly from file to tensor
-        uint32_t tensor_bytes_len = read_number(file);
+        // Read tensor byte length and load directly from input_stream to tensor
+        uint32_t tensor_bytes_len = read_number(input_stream);
 
         struct ggml_tensor* tensor;
         if (tensor_type == GGML_TYPE_F32)
-            tensor = load_tensor<float>(ctx, file, tensor_name, shape_len, tensor_shape, tensor_bytes_len, tensor_type);
+            tensor = load_tensor<float>(ctx, input_stream, tensor_name, shape_len, tensor_shape, tensor_bytes_len, tensor_type);
         else if (tensor_type == GGML_TYPE_F16)
-            tensor = load_tensor<ggml_fp16_t>(ctx, file, tensor_name, shape_len, tensor_shape, tensor_bytes_len, tensor_type);
+            tensor = load_tensor<ggml_fp16_t>(ctx, input_stream, tensor_name, shape_len, tensor_shape, tensor_bytes_len, tensor_type);
         else
             throw std::runtime_error("Unsupported tensor type");
 
@@ -91,12 +88,25 @@ std::tuple<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std
         tensors[tensor_name] = tensor;
     }
     printf("Loaded %lu tensors\n", tensors.size());
-    file.close();
+
     return std::make_tuple(tensors, config, std::move(tokenizer));
 }
 
 std::unique_ptr<vits_model_data> vits_model_data::from_file(const char* filename, ggml_context* ctx) {
-    auto tensors_and_config = load_model_from_bytes(filename, ctx);
+    std::ifstream file(filename, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("[ERROR] failed to open file: " + std::string(filename));
+    }
+
+    auto tensors_and_config = load_model_from_stream(file, ctx);
+
+    auto [tensor_map, config, tokenizer] = std::move(tensors_and_config);
+    return std::make_unique<vits_model_data>(tensor_map, config, std::move(tokenizer));
+}
+
+std::unique_ptr<vits_model_data> vits_model_data::from_bytes(const char* bytes, size_t size, ggml_context* ctx) {
+    std::istringstream stream(std::string(bytes, size));
+    auto tensors_and_config = load_model_from_stream(stream, ctx);
 
     auto [tensor_map, config, tokenizer] = std::move(tensors_and_config);
     return std::make_unique<vits_model_data>(tensor_map, config, std::move(tokenizer));

@@ -148,13 +148,17 @@ struct ggml_tensor* depthwise_conv_with_bias(struct ggml_context* ctx, struct gg
     // Each group is a 1d conv applied to a slice of the input. Depth-wise convolution
     //printf("Depthwise Convolution with %d groups\n", groups);
     auto final_result = tensor_zeros(ctx, nullptr, {input->ne[0], groups, input->ne[2]});
+    final_result = tensor_set_zero(ctx, final_result);
+
     for(int i = 0; i < groups; i++) {
         auto input_i = slice_3d(ctx, input, 0, -1, i, (i + 1), 0, -1, false);
-        auto weights_i = slice_3d(ctx, proj_weights, 0, -1, 0, -1, i, (i + 1), true);
+        auto weights_i = slice_3d(ctx, proj_weights, 0, -1, 0, -1, i, (i + 1), false);
 
         auto result = conv1d(ctx, input_i, weights_i, stride, padding, dilation);
         result = ggml_view_3d(ctx, result, result->ne[0], result->ne[1], result->ne[2], result->nb[1], result->nb[2], 0);
+
         final_result = tensor_set_inplace(ctx, final_result, result, 0, i, 0);
+
     }
 
     return tensor_add_bias_inplace(ctx, final_result, proj_bias);
@@ -408,12 +412,12 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
             cur = ggml_add(ctx, cur, residual);
             cur = layer_norm(ctx, cur, model->get("weight"), model->get("bias"), layer_norm_eps);
         }
-
     }
     this->log("Calculating prior and variances\n");
     // In the future add support for returning this
     this->log("Final proj for text encoder\n");
-    auto text_encoder_output = cur;
+    auto text_encoder_output = ggml_cont(ctx, cur);
+
 
     cur = ggml_permute(ctx, text_encoder_output, 1, 0, 2, 3);
     cur = ggml_cont(ctx, cur);
@@ -423,6 +427,7 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
     stats = ggml_cont(ctx, stats);
     stats = reshape_3d(ctx, stats, stats->ne[0], stats->ne[1], stats->ne[2]);
     ggml_format_name(stats, "stats");
+
 
     auto [prior_means, prior_log_variances] = split_3d(ctx, stats, flow_size, flow_size, 0);
     this->log("Finished text encoder\n");
@@ -663,7 +668,6 @@ struct ggml_tensor* vits_model::dilated_depth_separable_conv_graph(struct ggml_c
 
         hidden_states = ggml_gelu(ctx, hidden_states);
 
-
         auto conv_pointwise_i_weight = this->model->get("convs_pointwise." + std::to_string(i) + ".weight");
         auto conv_pointwise_i_bias = this->model->get("convs_pointwise." + std::to_string(i) + ".bias");
         hidden_states = conv1d_with_bias(ctx, hidden_states, conv_pointwise_i_weight, conv_pointwise_i_bias);
@@ -679,6 +683,7 @@ struct ggml_tensor* vits_model::dilated_depth_separable_conv_graph(struct ggml_c
         hidden_states = ggml_gelu(ctx, hidden_states);
         inputs = ggml_add(ctx, inputs, hidden_states);
     }
+
     return inputs;
 }
 
@@ -812,6 +817,8 @@ struct ggml_tensor* vits_model::unconstrained_rational_quadratic_spline(
 
     auto inside_interval_mask = ggml_mul(ctx, inputs_less_than_max, inputs_more_than_min);
     auto outside_interval_mask = tensor_binary_not(ctx, inside_interval_mask);
+    SHAPE(outside_interval_mask)
+    SHAPE(inside_interval_mask)
 
     auto outputs = zeros_like(ctx, nullptr, inputs);
     float constant = std::log(std::exp(1 - min_derivative) - 1);
@@ -855,6 +862,7 @@ struct ggml_tensor* vits_model::conv_flow_graph(struct ggml_context* ctx, struct
     auto hidden_states = conv1d_with_bias(ctx, first_half, this->model->get("conv_pre.weight"), this->model->get("conv_pre.bias"));
     {
         auto _0 = model->use("conv_dds");
+
         hidden_states = this->dilated_depth_separable_conv_graph(ctx, hidden_states, global_conditioning);
     }
 
@@ -938,13 +946,15 @@ struct ggml_tensor* vits_model::stochastic_duration_predictor_graph(struct ggml_
         auto latents = tensor_randn(ctx, nullptr, {inputs->ne[0], 2, inputs->ne[2]});
         latents = ggml_scale(ctx, latents, ggml_new_f32(ctx, noise_scale_duration));
         auto len_flows = duration_predictor_num_flows; // flows + elementwise affine
+
+
         for(int i = len_flows; i > -1; --i) {
             if (i == 1) continue;
 
             latents = flip_3d(ctx, latents, 1);
+
             auto _0 = model->use("flows." + std::to_string(i));
-            //if (debug_tensor == nullptr)
-            //    this->debug_tensor = latents;
+
             if (i == 0) {
                 latents = this->elementwise_affine_graph(ctx, latents, inputs, reverse);
             } else {
@@ -955,6 +965,7 @@ struct ggml_tensor* vits_model::stochastic_duration_predictor_graph(struct ggml_
         auto [log_duration_tensor, _] = split_3d(ctx, latents, 1, 1, 1);
         log_duration = log_duration_tensor;
     }
+
     return log_duration;
 }
 
@@ -1007,6 +1018,7 @@ struct ggml_cgraph* vits_model::build_graph_part_one(struct ggml_context* ctx, s
 
 struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* input_ids, struct ggml_tensor * cum_duration, struct ggml_tensor* prior_means, struct ggml_tensor* prior_log_variances, struct ggml_tensor* speaker_embeddings, int predicted_length) {
     this->log("Building graph part two, output_length %d\n", predicted_length);
+    auto start = std::chrono::high_resolution_clock::now();
     auto config = this->model->config;
     auto noise_scale_duration = this->load_float("noise_scale_duration");
     auto noise_scale = this->load_float("noise_scale");
@@ -1058,6 +1070,7 @@ struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, s
     if (this->debug_tensor != nullptr)
         ggml_build_forward_expand(gf, this->debug_tensor);
 
+    auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
     this->log("Finished building graph two, took %d milliseconds\n", delta);
 
 
@@ -1109,6 +1122,7 @@ std::vector<float> vits_model::process(std::string text) {
     this->execute_graph(graph_one_ctx, graph_one);
     delta += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
 
+    PRINT_TENSOR2(predicted_lengths_output);
     if (this->debug_tensor != nullptr)
         PRINT_TENSOR2(this->debug_tensor);
 
@@ -1123,12 +1137,12 @@ std::vector<float> vits_model::process(std::string text) {
 
     ggml_free(graph_one_ctx);
 
-    static size_t compute_buffer_size = (size_t)512 * MEGABYTE;
-    static std::vector<uint8_t> compute_buffer(compute_buffer_size);
+    size_t compute_buffer_size = (size_t)512 * MEGABYTE;
+    std::vector<uint8_t> compute_buffer(compute_buffer_size);
     struct ggml_allocr* allocr = ggml_allocr_new(compute_buffer.data(), compute_buffer_size, GGML_MEM_ALIGN);
 
-    static size_t buf_size = (size_t)16 * MEGABYTE;
-    static std::vector<uint8_t> buf(buf_size);
+    size_t buf_size = (size_t)16 * MEGABYTE;
+    std::vector<uint8_t> buf(buf_size);
     struct ggml_init_params params = {
             /*.mem_size   =*/ buf_size,
             /*.mem_buffer =*/ buf.data(),
@@ -1181,6 +1195,18 @@ vits_model * vits_model_load_from_file(const char * path) {
     struct ggml_context * ctx = ggml_init(params);
     printf("Initialized ggml context with %d mb\n", params.mem_size / 1024 / 1024);
     auto model_data = vits_model_data::from_file(path, ctx);
+    return new vits_model(ctx, std::move(model_data));
+}
+
+vits_model * vits_model_load_from_bytes(const char * bytes, size_t size) {
+    struct ggml_init_params params = {
+            .mem_size   = (size_t)256*1024*1024,
+            .mem_buffer = nullptr,
+    };
+
+    struct ggml_context * ctx = ggml_init(params);
+    printf("Initialized ggml context with %d mb\n", params.mem_size / 1024 / 1024);
+    auto model_data = vits_model_data::from_bytes(bytes, size, ctx);
     return new vits_model(ctx, std::move(model_data));
 }
 

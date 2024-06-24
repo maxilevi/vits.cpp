@@ -26,8 +26,7 @@ struct ggml_tensor* pad_3d(struct ggml_context* ctx, struct ggml_tensor* tensor,
     }
 
     auto cur = ggml_new_tensor(ctx, tensor->type, tensor->n_dims, new_shape);
-    //ALLOC(cur);
-    //memset(cur->data, 0, ggml_nelements(cur) * ggml_element_size(cur));
+    cur = tensor_set_zero(ctx, cur);
 
     size_t nb0 = tensor->nb[0];
     size_t nb1 = nb0 * cur->ne[0];
@@ -56,6 +55,7 @@ struct ggml_tensor* pad_2d(struct ggml_context* ctx, struct ggml_tensor* tensor,
     }
 
     auto cur = ggml_new_tensor(ctx, tensor->type, tensor->n_dims, new_shape);
+    cur = tensor_set_zero(ctx, cur);
 
     size_t nb0 = tensor->nb[0];
     size_t nb1 = nb0 * cur->ne[0];
@@ -107,6 +107,7 @@ struct ggml_tensor* slice_3d(struct ggml_context* ctx, struct ggml_tensor* tenso
         return sliced_view;
 
     auto cur = ggml_new_tensor(ctx, tensor->type, tensor->n_dims, new_shape);
+    //cur = tensor_set_zero(ctx, cur);
     cur = ggml_cpy(ctx, sliced_view, cur);
     ggml_format_name(cur, "%s_sliced_copy_[%d:%d, %d:%d, %d:%d]", tensor->name, start0, end0, start1, end1, start2, end2);
     return cur;
@@ -177,6 +178,7 @@ struct ggml_tensor* concat_3d(struct ggml_context* ctx, struct ggml_tensor* a, s
             a->ne[2]
     };
     struct ggml_tensor* result = ggml_new_tensor(ctx, a->type, a->n_dims, new_shape);
+    //result = tensor_set_zero(ctx, result);
     auto a_set = tensor_set_inplace(ctx, result, a, 0, 0, 0);
     auto b_set = tensor_set_inplace(ctx, a_set, b, dim == 0 ? a->ne[0] : 0, dim == 1 ? a->ne[1] : 0, 0);
     return b_set;
@@ -290,6 +292,7 @@ struct ggml_tensor* cast_tensor(struct ggml_context* ctx, struct ggml_tensor* te
     if (tensor->type == to) return tensor;
 
     struct ggml_tensor* target = ggml_new_tensor(ctx, to, tensor->n_dims, tensor->ne);
+    //target = tensor_set_zero(ctx, target);
     return ggml_cpy(ctx, tensor, target);
 }
 

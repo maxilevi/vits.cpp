@@ -7,7 +7,7 @@ build:
 	(cd build && make)
 
 clean:
-	rm -rf ./build
+	rm -rf ./build ./build_ios
 
 tests: build
 	./build/tests
@@ -20,7 +20,7 @@ bench: build
 
 ios:
 	mkdir -p build_ios
-	cmake -S . -B ./build_ios -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=./ios.toolchain.cmake
-	(cd build_ios && make)
+	cmake -S . -B ./build_ios -G Xcode -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=./ios-cmake/ios.toolchain.cmake -DPLATFORM=OS64
+	cmake --build build_ios --config Release
 
 .PHONY: all build run clean bench

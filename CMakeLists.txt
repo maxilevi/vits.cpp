@@ -4,6 +4,8 @@ project(vits VERSION 0.1.0)
 set(CMAKE_C_STANDARD   20)
 set(CMAKE_CXX_STANDARD 20)
 
+message(STATUS "CMAKE_SYSTEM_PROCESSOR: ${CMAKE_SYSTEM_PROCESSOR}")
+
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # Set the macro VITS_DEBUG=True
     message("Building in debug mode")
@@ -18,31 +20,37 @@ endif()
 add_subdirectory(ggml)
 #add_subdirectory(highway)
 
-add_library(vits src/vits.cpp src/vits_model_data.cpp
-        src/vits_tokenizer.cpp)
+add_library(vits src/vits.cpp src/vits_model_data.cpp src/vits_tokenizer.cpp src/debug.cpp)
 target_include_directories(vits PRIVATE ggml/include)
 
 target_link_libraries(vits PRIVATE ggml)
 
-add_executable(main test/main.cpp
-        src/include/vits_tokenizer.h
-        src/include/custom-ops.h
-        test/bench_conv1d.cpp
-)
-target_include_directories(main PRIVATE src/include ggml/include)
-target_link_libraries(main PRIVATE vits)
 
-add_executable(tests test/test_ggml_utils.cpp)
-target_include_directories(tests PRIVATE src/include ggml/include)
-target_link_libraries(tests PRIVATE vits ggml)
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    add_executable(main test/main.cpp
+            src/include/vits_tokenizer.h
+            src/include/custom-ops.h
+            test/bench_conv1d.cpp
+    )
+    target_include_directories(main PRIVATE src/include ggml/include)
+    target_link_libraries(main PRIVATE vits)
 
-add_executable(bench-simd test/bench_simd.cpp)
-target_include_directories(bench-simd PRIVATE src/include ggml/include highway/)
-target_link_libraries(bench-simd PRIVATE vits ggml)
+    add_executable(tests test/test_ggml_utils.cpp)
+    target_include_directories(tests PRIVATE src/include ggml/include)
+    target_link_libraries(tests PRIVATE vits ggml)
 
-add_executable(bench test/bench.cpp)
-set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable Benchmark Testing")
-set(BENCHMARK_DOWNLOAD_DEPENDENCIES ON CACHE BOOL "Enable downloading of dependencies")
-add_subdirectory(benchmark)
-target_include_directories(bench PRIVATE src/include ggml/include)
-target_link_libraries(bench PRIVATE vits ggml benchmark::benchmark)
+    add_executable(bench-avx2 test/bench_avx2.cpp)
+    target_include_directories(bench-avx2 PRIVATE src/include ggml/include highway/)
+    target_link_libraries(bench-avx2 PRIVATE vits ggml)
+
+    add_executable(bench-simd test/bench_simd.cpp)
+    target_include_directories(bench-simd PRIVATE src/include ggml/include highway/)
+    target_link_libraries(bench-simd PRIVATE vits ggml)
+
+    add_executable(bench test/bench.cpp)
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable Benchmark Testing")
+    set(BENCHMARK_DOWNLOAD_DEPENDENCIES ON CACHE BOOL "Enable downloading of dependencies")
+    add_subdirectory(benchmark)
+    target_include_directories(bench PRIVATE src/include ggml/include)
+    target_link_libraries(bench PRIVATE vits ggml benchmark::benchmark)
+endif()

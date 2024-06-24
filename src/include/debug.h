@@ -23,10 +23,13 @@ do { \
     printf("\n"); \
 } while (0);
 
+void print_stack_trace();
+
 #define ASSERT(x, msg) \
     do { \
         if (!(x)) { \
             fprintf(stderr, "Assertion failed: %s. Message: %s\n", #x, msg); \
+            print_stack_trace();           \
             exit(EXIT_FAILURE); \
         } \
     } while(0);
@@ -70,7 +73,7 @@ do { \
         printf("Assert_starts_with for %s has passed\n", #tensor);                                                 \
     } while(0);
 
-#define PRINT_TENSOR3(tensor, T)                                 \
+#define PRINT_TENSOR_WITH_TYPE(tensor, T)                                 \
     do {                                                           \
         printf("%s [type: %d] (%zu, %zu, %zu, %zu), (%zu, %zu, %zu, %zu): [\n", #tensor, tensor->type, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3], tensor->nb[0], tensor->nb[1], tensor->nb[2], tensor->nb[3]);                             \
         auto ne = tensor->ne;                                      \
@@ -96,9 +99,30 @@ do { \
         printf("]\n");                                             \
     } while (0);
 
-#define PRINT_TENSOR2(tensor) PRINT_TENSOR3(tensor, float)
-#define PRINT_TENSOR_INT32(tensor) PRINT_TENSOR3(tensor, int32_t)
-#define PRINT_TENSOR_FP16(tensor) PRINT_TENSOR3(tensor, ggml_fp16_t)
+
+#define PRINT_TENSOR2(tensor) PRINT_TENSOR_WITH_TYPE(tensor, float)
+#define PRINT_TENSOR_INT32(tensor) PRINT_TENSOR_WITH_TYPE(tensor, int32_t)
+#define PRINT_TENSOR_FP16(tensor) PRINT_TENSOR_WITH_TYPE(tensor, ggml_fp16_t)
+
+
+#define PRINT_TENSOR_ANY(tensor)                        \
+    do {                                            \
+        switch (tensor->type) {                     \
+            case GGML_TYPE_F32:                        \
+                PRINT_TENSOR2(tensor);              \
+                break;                              \
+            case GGML_TYPE_I32:                        \
+                PRINT_TENSOR_INT32(tensor);         \
+                break;                              \
+            case GGML_TYPE_F16:                         \
+                PRINT_TENSOR_FP16(tensor);          \
+                break;                              \
+            default:                                \
+                printf("Unsupported tensor type\n");\
+                break;                              \
+        }                                           \
+    } while (0);
+
 
 #define PRINT_TENSOR(tensor) \
     do { \

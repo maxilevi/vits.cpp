@@ -87,7 +87,10 @@ void for_each_element_threaded(const struct ggml_tensor* dst, int ith, int nth, 
     auto total_elements = ggml_nelements(dst);
     auto part_size = total_elements / nth;
     auto offset = part_size * ith;
-    for (size_t w = offset; w < offset + part_size; w++) {
+    auto remainder = total_elements % nth;
+    auto ending = remainder > 0 && nth-1 == ith ? total_elements : offset + part_size;
+
+    for (size_t w = offset; w < ending; w++) {
         int i = 0, j = 0, k = 0;
         compute_indices(dst, w, i, j, k);
 
@@ -95,6 +98,16 @@ void for_each_element_threaded(const struct ggml_tensor* dst, int ith, int nth, 
 
         callback(i, j, k);
     }
+
+    /*
+    if (remainder > 0 && ith < remainder) {
+        int i = 0, j = 0, k = 0;
+        compute_indices(dst, offset + part_size * nth + ith, i, j, k);
+
+        ASSERT(i < dst->ne[0] && j < dst->ne[1] && k < dst->ne[2], "Invalid index 2");
+
+        callback(i, j, k);
+    }*/
 }
 
 
@@ -162,9 +175,12 @@ struct ggml_tensor* name##suffix##_impl(struct ggml_context* ctx, struct ggml_te
         auto* src_ptr = (T*)src->data;                       \
         auto data = *(get_temp_data<float>(userdata));   \
         size_t size = ggml_element_size(src);                \
-        auto part_size = ggml_nelements(src) / nth;                                                     \
-        auto offset = ith * part_size;                                                     \
-        for(int w = offset; w < offset + part_size; ++w){\
+        auto total_elements = ggml_nelements(src); \
+        auto part_size = total_elements / nth;   \
+        auto offset = ith * part_size;                       \
+        auto remainder = ggml_nelements(src) % nth;                                                    \
+        auto ending = remainder > 0 && nth-1 == ith ? total_elements : offset + part_size;   \
+        for(int w = offset; w < ending; ++w){\
             if constexpr (has_param)\
                 dst_ptr[w] = name<T>(src_ptr[w], data);                         \
             else                                              \
@@ -360,19 +376,6 @@ template<class T> struct ggml_tensor* set_inplace_impl(struct ggml_context* ctx,
             auto dst_idx = (idx_offset_b + i * dst->nb[0] + j * dst->nb[1] + k * dst->nb[2]) / size;
             dst_ptr[dst_idx] = src1_ptr[idx1];
         });
-        /*
-         auto total_elements = ggml_nelements(dst);
-        auto part_size = total_elements / nth;
-        auto offset = part_size * ith;
-        for (size_t w = offset; w < offset + part_size; w++) {
-            int i = 0, j = 0, k = 0;
-            compute_indices(dst, w, i, j, k);
-
-            ASSERT(i < dst->ne[0] && j < dst->ne[1] && k < dst->ne[2], "Invalid index");
-
-            callback(i, j, k);
-        }
-         * */
         PRINT_BENCH("set_inplace")
     };
     auto userdata = allocate_temp_i32_array({start0, start1, start2});
@@ -404,8 +407,10 @@ template<class T> struct ggml_tensor* add_bias_inplace_impl(struct ggml_context*
         auto total_elements = ggml_nelements(dst);
         auto part_size = total_elements / nth;
         auto offset = part_size * ith;
+        auto remainder = total_elements % nth;
+        auto ending = remainder > 0 && nth-1 == ith ? total_elements : offset + part_size;
         auto ne0 = src0->ne[0];
-        for (size_t w = offset; w < offset + part_size; w++) {
+        for (size_t w = offset; w < ending; w++) {
             int j = w / ne0;
             dst_ptr[w] = src0_ptr[w] + *(bias_ptr + j);
         };
@@ -459,8 +464,11 @@ void execute_conv1d_fp16(struct ggml_tensor * dst, const struct ggml_tensor * in
 
     ggml_fp16_t input_buffer[max_buffer_size];
     ggml_fp16_t kernel_buffer[max_buffer_size];
+    auto total_elements = ggml_nelements(dst);
     auto part_size = output_size / nth;
     auto offset = part_size * ith;
+    auto remainder = total_elements % nth;
+    auto ending = remainder > 0 && nth-1 == ith ? total_elements : offset + part_size;
     // auto start = std::chrono::high_resolution_clock::now();
     printf("conv1d stride: %d channels: %d, kernel_size: %d, in_+length %d output_size %d\n", stride, output_channels, kernel_size, in_length, output_size);
     size_t w = 0;
@@ -470,7 +478,7 @@ void execute_conv1d_fp16(struct ggml_tensor * dst, const struct ggml_tensor * in
         for (int co = 0; co < output_channels; ++co) {
             for (int ci = 0; ci < input_channels; ++ci) {
                 auto partial_weight_idx = ci * weight_stride1 + co * weight_stride2;
-                for (int i = offset; i < offset + part_size; i++) {
+                for (int i = offset; i < ending; i++) {
                     size_t n = 0;
                     float sum = 0;
                     for (int j = 0; j < kernel_size; j += dilation) {
@@ -547,8 +555,10 @@ struct ggml_tensor* conv_1d_inplace_impl_fp16(struct ggml_context* ctx, struct g
         auto total_elements = ggml_nelements(dst);
         auto part_size = total_elements / nth;
         auto offset = part_size * ith;
+        auto remainder = total_elements % nth;
+        auto ending = remainder > 0 && nth-1 == ith ? total_elements : offset + part_size;
 
-        for (size_t w = offset; w < offset + part_size; w++) {
+        for (size_t w = offset; w < ending; w++) {
             dst_ptr[w] = work_data[w];
         };
     };
@@ -684,8 +694,10 @@ struct ggml_tensor* conv1d_impl(struct ggml_context* ctx, struct ggml_tensor* we
 void add_fast(float * dst_data, const float* src0_data, const float* src1_data, size_t n, int ith, int nth) {
     int part_size = n / nth;
     int offset = ith * part_size;
+    auto remainder = n % nth;
+    auto ending = remainder > 0 && nth-1 == ith ? n : offset + part_size;
     #pragma clang loop vectorize(enable)
-    for (int i = offset; i < offset + part_size; i++) {
+    for (int i = offset; i < ending; i++) {
         dst_data[i] = src0_data[i] + src1_data[i];
     }
 }
@@ -761,7 +773,9 @@ template<class T> struct ggml_tensor* gather_impl(struct ggml_context* ctx, stru
         {
             int j = (int) ((T*) index_tensor->data)[i];
             int index = j + i * values_tensor->ne[0];
-            ASSERT(index < ggml_nelements(values_tensor) && index > 0, "Index should be smaller than the number of elements in the value tensor");
+            char msg[1000];// than the number of elements in the value tensor
+            sprintf(msg, "Index should be smaller (%d < %d)", index, ggml_nelements(values_tensor));
+            ASSERT(index < ggml_nelements(values_tensor) && index >= 0, msg);
             ((T*)dst->data)[i] = values_ptr[index];
         }
         PRINT_BENCH("gather")
@@ -773,6 +787,39 @@ template<class T> struct ggml_tensor* gather_impl(struct ggml_context* ctx, stru
             tensor,
             func,
             1,
+            nullptr
+    );
+}
+
+template<class T> struct ggml_tensor* print_impl(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+
+    ggml_custom1_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * tensor, int ith, int nth, void * userdata) {
+        PRINT_TENSOR_ANY(dst)
+    };
+
+    return ggml_map_custom1_inplace(
+            ctx,
+            tensor,
+            func,
+            1,
+            nullptr
+    );
+}
+
+template<class T> struct ggml_tensor* set_zero_impl(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+
+    ggml_custom1_op_t func = [](struct ggml_tensor * dst, const struct ggml_tensor * tensor, int ith, int nth, void * userdata) {
+        auto op = [](T src0) {
+            return 0;
+        };
+        custom_op<T>(dst, tensor, ith, nth, op);
+    };
+
+    return ggml_map_custom1_inplace(
+            ctx,
+            tensor,
+            func,
+            GGML_N_TASKS_MAX,
             nullptr
     );
 }
@@ -789,8 +836,14 @@ template<class T> struct ggml_tensor* masked_set_impl(struct ggml_context* ctx, 
         auto value_tensor = c;
         float* values = ggml_get_data_f32(value_tensor);
         auto op = [&index, &values, value_tensor](T src0, T src1) {
-            ASSERT(abs(src1) < 1e-5f || abs(src1 - 1) < 1e-5f, "Mask tensor should be 0 or 1");
-            ASSERT(index < ggml_nelements(value_tensor), "Index should be smaller than the number of elements in the value tensor");
+            char msg[1000];// than the number of elements in the value tensor
+            sprintf(msg, "Index should be smaller (%d < %d)", index, ggml_nelements(value_tensor));
+            ASSERT(index < ggml_nelements(value_tensor), msg);
+
+            //printf("src1: %f, %d, %d\n", src1, index, ggml_nelements(value_tensor));
+            sprintf(msg, "Mask tensor should be 0 or 1, but is %f", (float) src1);
+            ASSERT(abs(src1) < 1e-5f || abs(src1 - 1) < 1e-5f, msg);
+            //printf("index: %d %d\n", index, (int) ggml_nelements(value_tensor));
             return ((int)src1) == 1 ? values[index++] : src0;
         };
         custom_op2<T>(dst, a, b, ith, nth, userdata, op);
@@ -828,7 +881,7 @@ template<class T> T ceil(T src) {
 }
 
 template<class T> T binary_not(T x) {
-    ASSERT(abs(x) < 1e-5f || abs(x - 1) < 1e-5f, "Input tensor should be 0 or 1");
+    ASSERT(abs((float)x) < 1e-8f || abs((float)x - 1) < 1e-8f, "Input tensor should be 0 or 1");
     return ((int)x) == 0 ? 1.0f : 0.0f;
 }
 
@@ -881,6 +934,14 @@ struct ggml_tensor* tensor_masked_get(struct ggml_context* ctx, struct ggml_tens
 
 struct ggml_tensor* tensor_masked_set(struct ggml_context* ctx, struct ggml_tensor* tensor, struct ggml_tensor* mask, struct ggml_tensor* value) {
     TENSOR_OP_IMPL(masked_set, tensor, ctx, tensor, mask, value);
+}
+
+struct ggml_tensor* tensor_print(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+    TENSOR_OP_IMPL(print, tensor, ctx, tensor);
+}
+
+struct ggml_tensor* tensor_set_zero(struct ggml_context* ctx, struct ggml_tensor* tensor) {
+    TENSOR_OP_IMPL(set_zero, tensor, ctx, tensor);
 }
 
 struct ggml_tensor* tensor_gather(struct ggml_context* ctx, struct ggml_tensor* tensor, int dim, struct ggml_tensor* index) {

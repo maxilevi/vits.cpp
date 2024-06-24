@@ -68,11 +68,18 @@ int main(int argc, char ** argv) {
     vits_model * model = vits_model_load_from_file("/Users/maximilianolevi/Documents/Repositories/vits.cpp/scripts/vits-spanish.ggml");
     assert(model != nullptr);
 
-    auto result = vits_model_process(model, notting_hill);
+    auto result = vits_model_process(model, "hola");
     if (result.size > 0) {
         printf("Generated: %d samples of audio %f %f %f\n", result.size, result.data[0], result.data[1],
                result.data[2]);
         printf("Wrote to file: %s\n", write_wav("output.wav", result.data, result.size) ? "true" : "false");
+    }
+
+    result = vits_model_process(model, "hola 2");
+    if (result.size > 0) {
+        printf("Generated: %d samples of audio %f %f %f\n", result.size, result.data[0], result.data[1],
+               result.data[2]);
+        printf("Wrote to file: %s\n", write_wav("output2.wav", result.data, result.size) ? "true" : "false");
     }
 
     vits_free_result(result);

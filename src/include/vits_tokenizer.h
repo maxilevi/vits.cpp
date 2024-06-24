@@ -20,7 +20,7 @@ public:
     std::string convert_tokens_to_string(const std::vector<std::string>& tokens);
     int convert_token_to_id(const std::string& token);
 
-    static std::unique_ptr<vits_tokenizer> load(std::ifstream& file);
+    static std::unique_ptr<vits_tokenizer> load(std::istream& file);
 
 private:
     std::unordered_map<std::string, int32_t> vocab;

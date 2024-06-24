@@ -91,6 +91,8 @@ typedef struct vits_result {
     size_t size;
 } vits_result;
 
+VITS_API vits_model * vits_model_load_from_bytes(const char * bytes, size_t size);
+
 VITS_API vits_model * vits_model_load_from_file(const char * path);
 
 VITS_API void vits_free_model(vits_model * model);

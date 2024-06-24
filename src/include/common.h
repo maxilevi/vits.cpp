@@ -10,7 +10,7 @@
 
 const int MEGABYTE = 1024 * 1024;
 
-static uint32_t read_number(std::ifstream& file) {
+static uint32_t read_number(std::istream& file) {
     uint32_t number;
     file.read(reinterpret_cast<char*>(&number), sizeof(uint32_t));
     return number;

@@ -13,7 +13,7 @@ vits_tokenizer::~vits_tokenizer() {
 
 }
 
-std::unique_ptr<vits_tokenizer> vits_tokenizer::load(std::ifstream& file) {
+std::unique_ptr<vits_tokenizer> vits_tokenizer::load(std::istream& file) {
     // Read the vocabulary size
     auto tokenizer = std::make_unique<vits_tokenizer>();
     uint32_t vocab_size = read_number(file);
