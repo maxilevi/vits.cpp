@@ -24,8 +24,6 @@ python3 scripts/export_vits.py
 
 To build and run the program you can run: 
 
-`make`
-
-# Exporting models
-
-`python scripts/export_vits.py`
+```
+make
+```
