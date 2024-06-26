@@ -817,8 +817,6 @@ struct ggml_tensor* vits_model::unconstrained_rational_quadratic_spline(
 
     auto inside_interval_mask = ggml_mul(ctx, inputs_less_than_max, inputs_more_than_min);
     auto outside_interval_mask = tensor_binary_not(ctx, inside_interval_mask);
-    SHAPE(outside_interval_mask)
-    SHAPE(inside_interval_mask)
 
     auto outputs = zeros_like(ctx, nullptr, inputs);
     float constant = std::log(std::exp(1 - min_derivative) - 1);
@@ -1078,13 +1076,13 @@ struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, s
 }
 
 void vits_model::execute_graph(struct ggml_context* ctx, struct ggml_cgraph* graph) {
-    printf("Allocating memory for work computation graph...\n");
+    log("Allocating memory for work computation graph...\n");
     int threads = get_thread_count();
     auto plan = ggml_graph_plan(graph, threads);
     if (plan.work_size > 0) {
         plan.work_data = (uint8_t*) malloc(plan.work_size);
     }
-    printf("Computing with %f mb ...\n", plan.work_size / MEGABYTE);
+    log("Computing with %f mb ...\n", plan.work_size / MEGABYTE);
     auto start = std::chrono::high_resolution_clock::now();
     ggml_graph_compute(graph, &plan);
     auto end = std::chrono::high_resolution_clock::now();
@@ -1116,18 +1114,20 @@ std::vector<float> vits_model::process(std::string text) {
     auto delta = 0;
     auto graph_one = this->build_graph_part_one(graph_one_ctx, input_ids_tensor, speaker_embeddings);
     delta += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
-    printf("Building graph one took %d milliseconds\n", delta);
+    log("Building graph one took %d milliseconds\n", delta);
 
     start = std::chrono::high_resolution_clock::now();
     this->execute_graph(graph_one_ctx, graph_one);
     delta += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
 
+#if VITS_DEBUG
     PRINT_TENSOR2(predicted_lengths_output);
+#endif
     if (this->debug_tensor != nullptr)
         PRINT_TENSOR2(this->debug_tensor);
 
     auto predicted_length = (int) ((float*) this->predicted_lengths_output->data)[0];
-    printf("predicted length %d\n", predicted_length);
+    log("predicted length %d\n", predicted_length);
     if (debug_mode)
         ASSERT(predicted_length == 73, "Predicted length mismatch");
 
@@ -1152,11 +1152,11 @@ std::vector<float> vits_model::process(std::string text) {
     struct ggml_context * graph_two_ctx = ggml_init(params);
 
     auto graph_two = this->build_graph_part_two(graph_two_ctx, allocr, input_ids_tensor, cum_duration_output_detached, prior_means_output_detached, prior_log_variances_output_detached, speaker_embeddings, predicted_length);
-    printf("Executing graph two\n");
+    log("Executing graph two\n");
     start = std::chrono::high_resolution_clock::now();
 
     size_t alloc_size = ggml_allocr_alloc_graph(allocr, graph_two);
-    printf("Allocated %f mb for graph two\n", alloc_size / (float)MEGABYTE);
+    log("Allocated %f mb for graph two\n", alloc_size / (float)MEGABYTE);
     this->execute_graph(graph_two_ctx, graph_two);
     delta += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
     //ggml_graph_dump_dot(graph_two, nullptr, "graph_two.dot");
@@ -1178,11 +1178,11 @@ std::vector<float> vits_model::process(std::string text) {
     //if (debug_tensor != nullptr)
     //    PRINT_TENSOR2(this->debug_tensor);
 
+    log("Total time %d milliseconds\n", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count());
     auto data = std::vector<float>((float *) this->waveform->data, (float *) this->waveform->data + ggml_nelements(this->waveform));
     ggml_free(shared_ctx);
     ggml_free(graph_two_ctx);
     ggml_allocr_free(allocr);
-    printf("Total time %d milliseconds\n", delta);
     return data;
 }
 

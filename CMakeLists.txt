@@ -27,21 +27,19 @@ target_link_libraries(vits PRIVATE ggml)
 
 
 if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    add_executable(main test/main.cpp
-            src/include/vits_tokenizer.h
-            src/include/custom-ops.h
-            test/bench_conv1d.cpp
-    )
+    add_executable(main test/main.cpp)
+
+    add_executable(bench_e2e test/bench_e2e.cpp)
+
     target_include_directories(main PRIVATE src/include ggml/include)
     target_link_libraries(main PRIVATE vits)
+
+    target_include_directories(bench_e2e PRIVATE src/include ggml/include)
+    target_link_libraries(bench_e2e PRIVATE vits)
 
     add_executable(tests test/test_ggml_utils.cpp)
     target_include_directories(tests PRIVATE src/include ggml/include)
     target_link_libraries(tests PRIVATE vits ggml)
-
-    add_executable(bench-avx2 test/bench_avx2.cpp)
-    target_include_directories(bench-avx2 PRIVATE src/include ggml/include highway/)
-    target_link_libraries(bench-avx2 PRIVATE vits ggml)
 
     add_executable(bench-simd test/bench_simd.cpp)
     target_include_directories(bench-simd PRIVATE src/include ggml/include highway/)

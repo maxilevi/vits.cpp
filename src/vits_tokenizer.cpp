@@ -63,11 +63,11 @@ std::vector<int32_t> vits_tokenizer::tokenize_fast(const std::string& input_stri
         }
 
         if (!found_match) {
-            printf("Could not find match for %s\n", input_string.substr(i, 1).c_str());
+            //printf("Could not find match for %s\n", input_string.substr(i, 1).c_str());
             i++;
         }
     }
-    printf("Tokenized text: '%s'\n", input_string.c_str());
+    //printf("Tokenized text: '%s'\n", input_string.c_str());
     return tokens;
 }
 

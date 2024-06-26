@@ -75,6 +75,19 @@ int main(int argc, char ** argv) {
         printf("Wrote to file: %s\n", write_wav("output.wav", result.data, result.size) ? "true" : "false");
     }
     vits_free_result(result);
+
+    auto delta = 0;
+    auto sample_size = 100;
+    for (size_t i = 0; i < sample_size; ++i) {
+        printf("Processing sample %lu\n", i);
+        auto start = std::chrono::high_resolution_clock::now();
+        result = vits_model_process(model, phrase);
+        auto end = std::chrono::high_resolution_clock::now();
+        delta += std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+        vits_free_result(result);
+    }
+    printf("Average time: %f ms\n", ((double) delta / (double) sample_size));
+
     vits_free_model(model);
     return 0;
 }
