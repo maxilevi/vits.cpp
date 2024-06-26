@@ -2,8 +2,11 @@
 
 a cpp ggml port of "VITS: Conditional Variational Autoencoder with Adversarial Learning for End-to-End Text-to-Speech." for use in mobile devices. 
 
-# Goal
+# How to compile & run
 
-# Structure
+To build and run the program you can run: 
+`make`
 
-# TODO
+# Exporting models
+
+`python scripts/export_vits.py`
