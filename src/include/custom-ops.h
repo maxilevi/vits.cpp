@@ -8,6 +8,10 @@
 #include <ggml/ggml.h>
 #include "debug.h"
 #include "common.h"
+#include <vector>
+#include <cstring>
+#include <functional>
+#include <cstdlib>
 
 #define START_BENCH() /*auto start = std::chrono::high_resolution_clock::now();*/
 
