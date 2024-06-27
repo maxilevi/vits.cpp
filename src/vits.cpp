@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <stdlib.h>
 #include <tuple>
+#include <cstdarg>
+#include <cstdio>
 #define VITS_DEBUG 0
 
 vits_model::vits_model(struct ggml_context* ctx, std::unique_ptr<vits_model_data> model) {
@@ -289,7 +291,7 @@ struct std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> vits_model::text_enc
             int src_len = key->ne[1];
 
             // Scaling the query_states (Assuming `scaling` is a float or double type variable you have)
-            float scaling = pow(head_dim, -0.5);
+            float scaling = std::pow(head_dim, -0.5);
             query = ggml_scale(ctx, query, ggml_new_f32(ctx, scaling));
 
             auto query_states = shape_attn(ctx, query, head_dim, num_heads, tgt_len);
@@ -462,7 +464,7 @@ struct ggml_tensor* vits_model::wavenet_graph(struct ggml_context* ctx, struct g
             struct ggml_tensor* acts = nullptr;
             {
                 auto _0 = model->use("in_layers." + std::to_string(i));
-                auto dilation = (int) pow(wavenet_dilation_rate, i);
+                auto dilation = (int) std::pow(wavenet_dilation_rate, i);
                 auto padding = (int) ((wavenet_kernel_size * dilation - dilation) / 2);
                 auto hidden_states = conv1d_with_bias(ctx, inputs, this->model->get("weight"), this->model->get("bias"), 1, padding, dilation);
                 if (global_conditioning != nullptr) {
@@ -588,7 +590,7 @@ struct ggml_tensor* vits_model::hifigan_graph(struct ggml_context* ctx, struct g
     std::vector<std::tuple<int, std::vector<int>, double>> all_params;
 
     for (int i = 0; i < num_upsamples; ++i) {
-        auto channels = this->load_number("upsample_initial_channel") / (int) pow(2, i + 1);
+        auto channels = this->load_number("upsample_initial_channel") / (int) std::pow(2, i + 1);
         for (int j = 0; j < kernel_sizes.size(); ++j) {
             all_params.push_back(std::make_tuple(kernel_sizes[j], dilations[j], leaky_relu_slope));
         }
@@ -652,7 +654,7 @@ struct ggml_tensor* vits_model::dilated_depth_separable_conv_graph(struct ggml_c
     for(int i = 0; i < num_layers; ++i) {
         auto conv_dilated_i_weight = this->model->get("convs_dilated." + std::to_string(i) + ".weight");
         auto conv_dilated_i_bias = this->model->get("convs_dilated." + std::to_string(i) + ".bias");
-        auto dilation = pow(kernel_size, i);
+        auto dilation = std::pow(kernel_size, i);
         auto padding = (int) ((kernel_size * dilation - dilation) / 2);
 
         auto hidden_states = depthwise_conv_with_bias(ctx, inputs, conv_dilated_i_weight, conv_dilated_i_bias, 1, padding, dilation);
@@ -996,7 +998,7 @@ struct ggml_cgraph* vits_model::build_graph_part_one(struct ggml_context* ctx, s
     this->predicted_lengths_output = tensor_max(ctx, predicted_lengths);
     this->cum_duration_output = tensor_per_row_cumsum(ctx, duration);
 
-    struct ggml_cgraph* gf = ggml_new_graph_custom(ctx, pow(2, 16), false);
+    struct ggml_cgraph* gf = ggml_new_graph_custom(ctx, std::pow(2, 16), false);
 
     ggml_build_forward_expand(gf, this->text_encoder_output);
     ggml_build_forward_expand(gf, this->cum_duration_output);

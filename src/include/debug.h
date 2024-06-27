@@ -7,6 +7,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 
 #define PRINT_MEM(ctx) \
     printf("Used mem = %f mb, free mem= %f mb, total mem = %f mb\n", ggml_used_mem(ctx) / 1024.0 / 1024.0, (ggml_get_mem_size(ctx) - ggml_used_mem(ctx)) / 1024.0 / 1024.0, ggml_get_mem_size(ctx) / 1024.0 / 1024.0);
