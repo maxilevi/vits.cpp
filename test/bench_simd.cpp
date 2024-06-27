@@ -32,6 +32,16 @@ namespace HWY_NAMESPACE {
 }  // namespace HWY_NAMESPACE
 HWY_AFTER_NAMESPACE();
 
+
+template<class T> void DotProductStandard(const T* arr1, const T* arr2, T* result, size_t size) {
+    T accum = 0;
+    for (size_t i = 0; i < size; ++i) {
+        accum += arr1[i] * arr2[i];
+    }
+    *result = accum;
+}
+
+#if defined(__ARM_NEON)
 #include <arm_neon.h>
 
 void DotProductSIMD_NEON(const float* arr1, const float* arr2, float* result, size_t size) {
@@ -54,13 +64,14 @@ void DotProductSIMD_NEON(const float* arr1, const float* arr2, float* result, si
     }
 }
 
-template<class T> void DotProductStandard(const T* arr1, const T* arr2, T* result, size_t size) {
-    T accum = 0;
-    for (size_t i = 0; i < size; ++i) {
-        accum += arr1[i] * arr2[i];
-    }
-    *result = accum;
+#else
+
+void DotProductSIMD_NEON(const float* arr1, const float* arr2, float* result, size_t size) {
+    printf("NEON not supported on this platform\n");
+    DotProductStandard(arr1, arr2, result, size);
 }
+
+#endif
 
 template<typename T>
 std::pair<T, T> calculateMeanAndStd(const std::vector<T>& data) {
