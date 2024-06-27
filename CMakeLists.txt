@@ -32,10 +32,10 @@ if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     add_executable(bench_e2e test/bench_e2e.cpp)
 
     target_include_directories(main PRIVATE src/include ggml/include)
-    target_link_libraries(main PRIVATE vits)
+    target_link_libraries(main PRIVATE vits ggml)
 
     target_include_directories(bench_e2e PRIVATE src/include ggml/include)
-    target_link_libraries(bench_e2e PRIVATE vits)
+    target_link_libraries(bench_e2e PRIVATE vits ggml)
 
     add_executable(tests test/test_ggml_utils.cpp)
     target_include_directories(tests PRIVATE src/include ggml/include)
