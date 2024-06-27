@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <cmath>
 #include <numeric>
+#include <memory>
 
 // Include your libraries
 #include <ggml/ggml.h>
