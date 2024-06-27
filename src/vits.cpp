@@ -910,7 +910,7 @@ struct ggml_tensor* vits_model::elementwise_affine_graph(struct ggml_context* ct
     log_scale = ggml_cont(ctx, log_scale);
     log_scale = ggml_permute(ctx, log_scale, 1, 0, 2, 3);
 
-    auto exp = tensor_exp(ctx, log_scale);
+    auto exp = tensor_exponential(ctx, log_scale);
     auto result = ggml_mul(ctx, translated, exp);
 
     result = ggml_permute(ctx, result, 1, 0, 2, 3);
@@ -989,7 +989,7 @@ struct ggml_cgraph* vits_model::build_graph_part_one(struct ggml_context* ctx, s
     ASSERT(config["use_stochastic_duration_prediction"] == "True", "Only stochastic duration prediction is supported");
     auto log_duration = this->stochastic_duration_predictor_graph(ctx, hidden_states, speaker_embeddings, true, noise_scale_duration);
     auto length_scale = ggml_new_f32(ctx, 1.0 / speaking_rate);
-    auto duration = tensor_ceil(ctx, ggml_scale(ctx, tensor_exp(ctx, log_duration), length_scale));
+    auto duration = tensor_ceiling(ctx, ggml_scale(ctx, tensor_exponential(ctx, log_duration), length_scale));
     this->log_duration_output = log_duration;
     ASSERT_SHAPE(this->log_duration_output, input_ids->ne[0], 1, 1, 0);
     auto predicted_lengths = ggml_clamp(ctx, ggml_sum(ctx, duration), 1, std::numeric_limits<float>::max());
@@ -1053,7 +1053,7 @@ struct ggml_cgraph* vits_model::build_graph_part_two(struct ggml_context* ctx, s
     prior_log_variances = ggml_cont(ctx, prior_log_variances);
 
     auto noise = tensor_randn_like(ctx, allocr, prior_means);
-    noise = ggml_mul(ctx, noise, tensor_exp(ctx, prior_log_variances));
+    noise = ggml_mul(ctx, noise, tensor_exponential(ctx, prior_log_variances));
     noise = ggml_scale(ctx, noise, ggml_new_f32(ctx, noise_scale));
 
     auto prior_latents = ggml_add(ctx, prior_means, noise);

@@ -600,8 +600,6 @@ struct ggml_tensor* conv_1d_inplace_impl_fp16(struct ggml_context* ctx, struct g
 <11, 5, 128>
 */
 
-#include <arm_neon.h>
-
 
 void im2col_multi_channel(float * dst_data, const float* src_data, int num_channels, int input_length, int output_length, int kernel_size, int stride, int padding, int dilation, int ith, int nth) {
     // Precompute constants that are invariant across the inner loops
@@ -863,7 +861,7 @@ template<class T> T sigmoid(T src) {
     return (T) (1.0f / (1.0f + std::exp(-(float)src)));
 }
 
-template<class T> T exp(T src) {
+template<class T> T exponential(T src) {
     return (T) std::exp((float)src);
 }
 
@@ -876,7 +874,7 @@ template<class T> T softplus(T x) {
     return (T) (1.0f / beta * std::log(1.0 + std::exp(beta * xf)));
 }
 
-template<class T> T ceil(T src) {
+template<class T> T ceiling(T src) {
     return (T) std::ceil((float)src);
 }
 
@@ -895,11 +893,11 @@ template<class T> T leaky_relu(T src, float slope) {
 
 UNARY_OP(sigmoid)
 
-UNARY_OP(exp)
+UNARY_OP(exponential)
 
 UNARY_OP(softplus)
 
-UNARY_OP(ceil)
+UNARY_OP(ceiling)
 
 UNARY_OP(binary_not)
 
