@@ -6,8 +6,7 @@
 #include <cmath>
 #include <numeric>
 #include <memory>
-
-// Include your libraries
+#include <cstring>
 #include <ggml/ggml.h>
 #include <hwy/highway.h>
 
