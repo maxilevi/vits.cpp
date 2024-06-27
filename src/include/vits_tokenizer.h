@@ -8,6 +8,7 @@
 #include <vector>
 #include <unordered_map>
 #include <string>
+#include <memory>
 
 class vits_tokenizer {
 public:
