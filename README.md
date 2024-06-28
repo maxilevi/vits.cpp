@@ -8,7 +8,7 @@ Clone and fetch all submodules
 ```
 git@github.com:maxilevi/vits.cpp.git
 cd vits.cpp
-git submodule update --init --rec   ursive
+git submodule update --init --recursive
 ```
 
 Fetch the models
