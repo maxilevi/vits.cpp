@@ -6,6 +6,12 @@
 #include "include/common.h"
 #include "include/debug.h"
 
+
+#ifdef VITS_ESPEAK
+#include <cstring>
+#include <espeak-ng/speak_lib.h>    
+#endif
+
 vits_tokenizer::vits_tokenizer() {
 
 }
@@ -112,7 +118,72 @@ std::string vits_tokenizer::prepare_for_tokenization(const std::string& text, bo
     return {processed_text, {}};
 }
 
+#ifdef VITS_ESPEAK
+static bool init_espeak = false;
+std::vector<char> convert_to_phonetic(char* b, char* e)
+{
+    std::vector<char> ret;
+    ret.reserve(2*std::distance(b,e));
+    while(b != e)
+    {
+	const std::size_t pos = std::basic_string_view(b,e).find_first_of("!\\,.:;?");
+	if(pos != std::string::npos)
+	{
+	    const char c = b[pos];
+	    b[pos] = 0;
+	    const char* t = b;
+	    const char* rb = espeak_TextToPhonemes((const void**)&t, espeakCHARS_8BIT, 2);
+	    ret.insert(ret.end(), rb, rb+std::strlen(rb));
+	    ret.push_back(c);
+	    b+=(pos+1);
+	    if(c == '.' && b[0] == '.' && b[1] == '.')
+	    {
+		ret.push_back('.');
+		ret.push_back('.');
+		b+=2;
+	    }
+	    if(b != e)
+		ret.push_back(' ');
+		
+	}
+	else
+	{
+	    const char* t = b;
+	    const char* rb = espeak_TextToPhonemes((const void**)&t, espeakCHARS_8BIT, 2);
+	    ret.insert(ret.end(), rb, rb+std::strlen(rb));
+	    b=e;
+	}
+    }
+    return ret;
+}
+
+void vits_tokenizer::set_phonetic()
+{
+    if(!init_espeak)
+    {
+	espeak_Initialize(AUDIO_OUTPUT_SYNCHRONOUS, 0, nullptr, 0);
+	espeak_VOICE voice{nullptr, nullptr, nullptr, 0, 0};
+	voice.languages="en-us";
+	espeak_ERROR result = espeak_SetVoiceByProperties(&voice);
+	ASSERT(result == EE_OK, "Espeak did not correctly initialize");
+	init_espeak = true;
+	//we have no espeak_Terminate();
+    }
+    phonetic = true;
+}
+#else
+void vits_tokenizer::set_phonetic()
+{
+    ASSERT(false, "Espeak is not available");
+}
+#endif
+
+
 std::vector<int32_t> vits_tokenizer::tokenize(const std::string& text) {
+#ifdef VITS_ESPEAK
+    if(!phonetic)
+    {
+#endif   
     //auto normalized_text = this->prepare_for_tokenization(text, false, normalize);
     //printf("Normalized text: %s\n", normalized_text.c_str());
 /*
@@ -121,20 +192,52 @@ std::vector<int32_t> vits_tokenizer::tokenize(const std::string& text) {
         token_strs.push_back(std::string(1, c));
     }
 */
-    std::string processed_text = text;
-    std::transform(processed_text.begin(), processed_text.end(), processed_text.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-
-    std::vector<int32_t> tokens = tokenize_fast(processed_text);
-    std::vector<int32_t> tokens_final;
-    if (add_blank) {
-        std::vector<int32_t> interspersed(tokens.size() * 2 + 1, vocab[pad_token]);
-        for (size_t i = 0; i < tokens.size(); ++i) {
-            interspersed[i * 2 + 1] = tokens[i];
-        }
-        tokens_final = interspersed;
+	std::string processed_text = text;
+	std::transform(processed_text.begin(), processed_text.end(), processed_text.begin(),
+		       [](unsigned char c){ return std::tolower(c); });
+	
+	std::vector<int32_t> tokens = tokenize_fast(processed_text);
+	std::vector<int32_t> tokens_final;
+	if (add_blank) {
+	    std::vector<int32_t> interspersed(tokens.size() * 2 + 1, vocab[pad_token]);
+	    for (size_t i = 0; i < tokens.size(); ++i) {
+		interspersed[i * 2 + 1] = tokens[i];
+	    }
+	    tokens_final = interspersed;
+	}
+	return tokens_final;
+#ifdef VITS_ESPEAK
     }
-    return tokens_final;
+    else
+    {
+	std::string copy(text);
+	std::vector<char> phonetic_text = convert_to_phonetic(copy.data(), copy.data()+copy.size());
+	std::vector<int32_t> tokens;
+	tokens.reserve(phonetic_text.size()*(add_blank?2:1) + 1);
+	if(add_blank)
+	    tokens.push_back(0);
+	std::basic_string_view v(phonetic_text.begin(), phonetic_text.end());
+	while(!v.empty())
+	{
+	    auto it = vocab.begin();
+	    while(it != vocab.end() && !v.starts_with(it->first))
+		++it;
+	    if(it == vocab.end())
+	    {
+		tokens.push_back(0);//did not find
+		v.remove_prefix(1);
+	    }
+	    else
+	    {
+		tokens.push_back(it->second);
+		v.remove_prefix(it->first.size());
+	    }
+	    if(add_blank)
+		tokens.push_back(0);
+	}
+	return tokens;
+    }
+#endif  	
 }
 
 int vits_tokenizer::convert_token_to_id(const std::string& token) {
