@@ -28,6 +28,8 @@ vits_model::~vits_model() {
     ggml_free(weights_ctx);
 }
 
+std::default_random_engine rng;
+
 template<>
 std::vector<int> vits_model::load_vector_impl<int>(const std::string& serialized_data) {
     this->log("Loading vector %s\n", serialized_data.c_str());
