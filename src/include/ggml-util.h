@@ -184,12 +184,13 @@ struct ggml_tensor* concat_3d(struct ggml_context* ctx, struct ggml_tensor* a, s
     return b_set;
 }
 
+extern std::default_random_engine rng;
+
 struct ggml_tensor* tensor_randn(struct ggml_context* ctx, struct ggml_allocr* allocr, std::vector<int64_t> dims) {
     auto tensor = ggml_new_tensor(ctx, DEFAULT_TENSOR_TYPE, dims.size(), dims.data());
     ALLOC(tensor)
     auto data = static_cast<float*>(tensor->data);
     auto size = ggml_nelements(tensor) ;
-    std::mt19937 rng;
     std::normal_distribution<float> dist(0.0f, 1.0f);
     for (int i = 0; i < size; ++i) {
         data[i] = dist(rng);
