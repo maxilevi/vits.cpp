@@ -89,6 +89,10 @@ std::tuple<std::unordered_map<std::string, ggml_tensor*>, std::unordered_map<std
     }
     printf("Loaded %lu tensors\n", tensors.size());
 
+    auto it = config.find("phonetic");
+    if(it != config.end() && it->second == "1")
+	tokenizer->set_phonetic();
+
     return std::make_tuple(tensors, config, std::move(tokenizer));
 }
 

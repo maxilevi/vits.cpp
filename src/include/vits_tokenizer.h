@@ -22,11 +22,13 @@ public:
     int convert_token_to_id(const std::string& token);
 
     static std::unique_ptr<vits_tokenizer> load(std::istream& file);
+    void set_phonetic();
 
 private:
     std::unordered_map<std::string, int32_t> vocab;
     bool add_blank;
     bool normalize;
+    bool phonetic = false;
     std::string pad_token;
     std::string unk_token;
 };

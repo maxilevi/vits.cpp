@@ -25,14 +25,20 @@ target_include_directories(vits PRIVATE ggml/include)
 
 target_link_libraries(vits PRIVATE ggml)
 
+find_library(LIBESPEAK_LIBRARIES espeak-ng)
+if(LIBESPEAK_LIBRARIES)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(ESPEAK REQUIRED espeak-ng)
+    add_definitions(-DVITS_ESPEAK)
+endif()
 
 if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     add_executable(main test/main.cpp)
 
     add_executable(bench_e2e test/bench_e2e.cpp)
 
-    target_include_directories(main PRIVATE src/include ggml/include)
-    target_link_libraries(main PRIVATE vits ggml)
+    target_include_directories(main PRIVATE src/include ggml/include ${ESPEAK_INCLUDE_DIRS})
+    target_link_libraries(main PRIVATE vits ggml ${ESPEAK_LIBRARIES})
 
     target_include_directories(bench_e2e PRIVATE src/include ggml/include)
     target_link_libraries(bench_e2e PRIVATE vits ggml)
