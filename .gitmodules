@@ -1,6 +1,6 @@
 [submodule "ggml"]
 	path = ggml
-	url = git@github.com:maxilevi/ggml.git
+	url = https://github.com/maxilevi/ggml.git
 [submodule "highway"]
 	path = highway
 	url = https://github.com/google/highway.git
