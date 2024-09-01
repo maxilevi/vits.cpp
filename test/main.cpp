@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
 
     //rng.seed(params.seed);
 
-    auto result = vits_model_process(model, phrase);
+    auto result = vits_model_process(model, params.phrase.c_str());
     //auto result = vits_model_process(model, params.phrase.c_str(), params.n_threads);
     if (result.size > 0) {
         printf("Generated: %d samples of audio %f %f %f\n", result.size, result.data[0], result.data[1],
